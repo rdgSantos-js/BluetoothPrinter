@@ -1,11 +1,7 @@
 package com.example.btprint
 
-import android.Manifest
 import android.bluetooth.BluetoothDevice
-import android.content.pm.PackageManager
 import android.graphics.Bitmap // Import Bitmap
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image // Import Image Composable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -29,10 +25,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.core.app.ActivityCompat
 import com.example.btprint.ui.theme.BtprintTheme
 
-@RequiresApi(Build.VERSION_CODES.S)
 @Composable
 fun BluetoothControlScreen(
     modifier: Modifier = Modifier,
@@ -128,7 +122,6 @@ fun BluetoothControlScreen(
 }
 
 
-@RequiresApi(Build.VERSION_CODES.S)
 @Preview(showBackground = true)
 @Composable
 fun DefaultPreview() {

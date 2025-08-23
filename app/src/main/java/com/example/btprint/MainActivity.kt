@@ -1,6 +1,7 @@
 package com.example.btprint
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
@@ -25,7 +26,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+// import androidx.compose.material3.Text // Unused import
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,29 +43,41 @@ import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
 import java.nio.charset.Charset
-import kotlinx.coroutines.delay
+// import kotlinx.coroutines.delay // Unused import
+
+// Imports for escpos-android library
+import com.dantsu.escposprinter.EscPosPrinter
+import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection
+import com.dantsu.escposprinter.connection.bluetooth.BluetoothPrintersConnections
+import com.dantsu.escposprinter.textparser.PrinterTextParserImg
 
 // Helper function to get device name safely considering permissions
 fun BluetoothDevice.getSafeName(context: Context): String {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        @SuppressLint("MissingPermission") // Checked by higher level functions or contextually appropriate
         if (ActivityCompat.checkSelfPermission(
                 context,
                 Manifest.permission.BLUETOOTH_CONNECT
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+            // Before Android S, we might not have BLUETOOTH_CONNECT, but name is accessible.
+            // For S and above, if permission is missing, return address.
             return this.address ?: "Unknown (No Permission)"
         }
     }
     return try {
-        this.name ?: "Unknown Device"
-    } catch (e: SecurityException) {
+        @SuppressLint("MissingPermission") // Checked by higher level functions or contextually appropriate
+        val name = this.name
+        name ?: this.address ?: "Unknown Device"
+    } catch (_: SecurityException) { // Parameter e is never used
+        // Log.e(MainActivity.TAG, "SecurityException while getting device name for ${this.address}", e)
         this.address ?: "Unknown (Security Exception)"
     }
 }
 
 class MainActivity : ComponentActivity() {
 
-    private val bluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
+    private val bluetoothManager by lazy { getSystemService(BLUETOOTH_SERVICE) as BluetoothManager } // Removed redundant Context qualifier
     private val bluetoothAdapter: BluetoothAdapter? by lazy { bluetoothManager.adapter }
     private val discoveredDevices = mutableStateListOf<BluetoothDevice>()
     private var selectedDevice by mutableStateOf<BluetoothDevice?>(null)
@@ -72,20 +85,23 @@ class MainActivity : ComponentActivity() {
     private var imageToSend by mutableStateOf<Bitmap?>(null)
 
     companion object {
-        private const val tag = "BluetoothApp"
-        private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        private const val TAG = "BluetoothAppTag" // Consistent Log Tag
+        private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        private const val REQUEST_ENABLE_BT = 101
+        // private const val PERMISSION_REQUEST_CODE = 102 // Property is never used
     }
 
     private lateinit var imagePickerLauncher: ActivityResultLauncher<String>
 
     private val discoveryReceiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission") // Permissions are checked before starting discovery or accessing device details
         override fun onReceive(context: Context, intent: Intent) {
             val action: String? = intent.action
-            Log.d(tag, "discoveryReceiver: Received action: $action")
+            Log.d(TAG, "discoveryReceiver: Received action: $action")
 
             when (action) {
                 BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
-                    Log.i(tag, "discoveryReceiver: ACTION_DISCOVERY_STARTED - Discovery process has started.")
+                    Log.i(TAG, "discoveryReceiver: ACTION_DISCOVERY_STARTED - Discovery process has started.")
                 }
                 BluetoothDevice.ACTION_FOUND -> {
                     val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -96,53 +112,71 @@ class MainActivity : ComponentActivity() {
                     }
                     device?.let {
                         val deviceNameForLog = it.getSafeName(this@MainActivity)
-                        val deviceAddress = it.address ?: "Endereço_Desconhecido"
-                        Log.d(tag, "discoveryReceiver: ACTION_FOUND - Device: $deviceNameForLog ($deviceAddress)")
-                        if (it !in discoveredDevices) {
+                        val deviceAddress = it.address ?: "Unknown Address"
+                        Log.d(TAG, "discoveryReceiver: ACTION_FOUND - Device: $deviceNameForLog ($deviceAddress)")
+                        // BLUETOOTH_CONNECT is checked in getSafeName for S+
+                        // For adding to list, name is the primary concern here.
+                        if (it.name != null && it !in discoveredDevices) {
                             discoveredDevices.add(it)
-                            Log.i(tag, "discoveryReceiver: Device $deviceNameForLog ($deviceAddress) added to discoveredDevices list.")
+                            Log.i(TAG, "discoveryReceiver: Device $deviceNameForLog ($deviceAddress) added to discoveredDevices list.")
+                        } else if (it.name == null) {
+                            Log.d(TAG, "discoveryReceiver: Device with null name not added: $deviceAddress")
                         } else {
-                            Log.d(tag, "discoveryReceiver: Device $deviceNameForLog ($deviceAddress) already in list.")
+                            Log.d(TAG, "discoveryReceiver: Device $deviceNameForLog ($deviceAddress) already in list.")
                         }
-                    } ?: Log.w(tag, "discoveryReceiver: ACTION_FOUND - Device is null.")
+                    } ?: Log.w(TAG, "discoveryReceiver: ACTION_FOUND - Device is null.")
                 }
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    Log.i(tag, "discoveryReceiver: ACTION_DISCOVERY_FINISHED - Discovery process has finished.")
-                    Toast.makeText(context, "Scan finished.", Toast.LENGTH_SHORT).show()
+                    Log.i(TAG, "discoveryReceiver: ACTION_DISCOVERY_FINISHED - Discovery process has finished.")
+                    if (discoveredDevices.isEmpty()) {
+                        Toast.makeText(context, "Scan finished. No new devices found.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Scan finished.", Toast.LENGTH_SHORT).show()
+                    }
                 }
                 else -> {
-                    Log.w(tag, "discoveryReceiver: Received unhandled action: $action")
+                    Log.w(TAG, "discoveryReceiver: Received unhandled action: $action")
                 }
             }
         }
     }
 
+    @SuppressLint("InlinedApi") // BLUETOOTH_SCAN and BLUETOOTH_CONNECT are SDK S+
     private val requestBluetoothPermissionsLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            Log.d(tag, "requestBluetoothPermissionsLauncher: Received permission results:")
-            permissions.entries.forEach { Log.d(tag, "  ${it.key} = ${it.value}") }
+            Log.d(TAG, "requestBluetoothPermissionsLauncher: Received permission results:")
+            permissions.entries.forEach { Log.d(TAG, "  ${it.key} = ${it.value}") }
 
-            val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
-            val scanGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false
-            } else true
+            val scanGranted = permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false
+            val connectGranted = permissions[Manifest.permission.BLUETOOTH_CONNECT] ?: false
+            val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false // Still good to have for discovery robustness
 
-            if (scanGranted && fineLocationGranted) {
-                Log.i(tag, "requestBluetoothPermissionsLauncher: All critical permissions granted. Starting discovery.")
-                startBluetoothDiscovery()
-            } else {
-                Log.e(tag, "requestBluetoothPermissionsLauncher: Not all critical permissions granted. Scan: $scanGranted, Location: $fineLocationGranted")
-                Toast.makeText(this, "Permissions are required to scan for devices.", Toast.LENGTH_LONG).show()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (scanGranted && connectGranted) {
+                    Log.i(TAG, "requestBluetoothPermissionsLauncher: BLUETOOTH_SCAN and BLUETOOTH_CONNECT permissions granted. Starting discovery.")
+                    startBluetoothDiscovery()
+                } else {
+                    Log.e(TAG, "requestBluetoothPermissionsLauncher: BLUETOOTH_SCAN ($scanGranted) or BLUETOOTH_CONNECT ($connectGranted) permission denied.")
+                    Toast.makeText(this, "Bluetooth Scan and Connect permissions are required to find and connect to devices.", Toast.LENGTH_LONG).show()
+                }
+            } else { // Pre-Android S
+                if (fineLocationGranted) { // Primarily ACCESS_FINE_LOCATION was key for discovery
+                     Log.i(TAG, "requestBluetoothPermissionsLauncher: ACCESS_FINE_LOCATION permission granted on pre-S device. Starting discovery.")
+                    startBluetoothDiscovery()
+                } else {
+                    Log.e(TAG, "requestBluetoothPermissionsLauncher: ACCESS_FINE_LOCATION permission denied on pre-S device.")
+                    Toast.makeText(this, "Location permission is required to scan for devices on older Android versions.", Toast.LENGTH_LONG).show()
+                }
             }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.d(tag, "onCreate: Activity creating.")
+        Log.d(TAG, "onCreate: Activity creating.")
 
         imagePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
             uri?.let {
-                Log.d(tag, "imagePickerLauncher: Image URI selected: $it")
+                Log.d(TAG, "imagePickerLauncher: Image URI selected: $it")
                 try {
                     val bitmap = if (Build.VERSION.SDK_INT < 28) {
                         @Suppress("DEPRECATION")
@@ -152,15 +186,14 @@ class MainActivity : ComponentActivity() {
                         ImageDecoder.decodeBitmap(source)
                     }
                     imageToSend = bitmap.copy(Bitmap.Config.ARGB_8888, true) // Ensure mutable bitmap
-                    Log.i(tag, "imagePickerLauncher: Bitmap created successfully.")
+                    Log.i(TAG, "imagePickerLauncher: Bitmap created successfully. Width: ${imageToSend?.width}, Height: ${imageToSend?.height}")
                 } catch (e: Exception) {
-                    Log.e(tag, "imagePickerLauncher: Error creating Bitmap from URI: ${e.message}", e)
+                    Log.e(TAG, "imagePickerLauncher: Error creating Bitmap from URI: ${e.message}", e)
                     Toast.makeText(this, "Error loading image: ${e.message}", Toast.LENGTH_LONG).show()
                     imageToSend = null
                 }
-            } ?: Log.d(tag, "imagePickerLauncher: No image URI selected (uri is null).")
+            } ?: Log.d(TAG, "imagePickerLauncher: No image URI selected (uri is null).")
         }
-
 
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
@@ -169,12 +202,12 @@ class MainActivity : ComponentActivity() {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(discoveryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            Log.d(tag, "onCreate: discoveryReceiver registered with RECEIVER_NOT_EXPORTED.")
+            registerReceiver(discoveryReceiver, filter, RECEIVER_NOT_EXPORTED)
+            Log.d(TAG, "onCreate: discoveryReceiver registered with RECEIVER_NOT_EXPORTED.")
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(discoveryReceiver, filter)
-            Log.d(tag, "onCreate: discoveryReceiver registered (pre-Tiramisu).")
+            Log.d(TAG, "onCreate: discoveryReceiver registered (pre-Tiramisu).")
         }
         
         addBondedDevicesToList()
@@ -182,415 +215,372 @@ class MainActivity : ComponentActivity() {
         setContent {
             BtprintTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        BluetoothControlScreen(
-                            modifier = Modifier.padding(innerPadding),
-                            devices = discoveredDevices,
-                            selectedDevice = selectedDevice,
-                            textToSend = textToSend,
-                            imageToSend = imageToSend, // Pass imageToSend to composable
-                            onTextChange = { textToSend = it },
-                            onScanClicked = {
-                                Log.d(tag, "onScanClicked: Scan button clicked.")
-                                checkAndRequestPermissions()
-                            },
-                            onDeviceSelected = { device ->
-                                Log.d(tag, "onDeviceSelected: Device ${device.getSafeName(this@MainActivity)} (${device.address ?: "N/A"}) selected.")
-                                selectedDevice = device
-                            },
-                            onSendImageClicked = {
-                                Log.d(tag, "onSendImageClicked: Send Image button logic initiated.")
-                                if (imageToSend == null) {
-                                    Log.i(tag, "onSendImageClicked: No image selected. Launching image picker.")
-                                    imagePickerLauncher.launch("image/*")
-                                } else {
-                                    selectedDevice?.let { device ->
-                                        Log.i(tag, "onSendImageClicked: Image selected. Attempting to send to ${device.getSafeName(this@MainActivity)}.")
-                                        sendImageToDevice(device, imageToSend)
-                                        // imageToSend = null // Clear after attempting to send
-                                    } ?: run {
-                                        Log.w(tag, "onSendImageClicked: No device selected for image sending.")
-                                        Toast.makeText(this, "No device selected for image sending", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            },
-                            onSendToPrinterClicked = {
-                                Log.d(tag, "onSendToPrinterClicked: Send to Printer button clicked.")
+                    BluetoothControlScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        devices = discoveredDevices,
+                        selectedDevice = selectedDevice,
+                        textToSend = textToSend,
+                        imageToSend = imageToSend,
+                        onTextChange = { textToSend = it },
+                        onScanClicked = {
+                            Log.d(TAG, "onScanClicked: Scan button clicked.")
+                            checkAndRequestPermissions()
+                        },
+                        onDeviceSelected = { device ->
+                            Log.d(TAG, "onDeviceSelected: Device ${device.getSafeName(this@MainActivity)} (${device.address ?: "N/A"}) selected.")
+                            selectedDevice = device
+                        },
+                        onSendImageClicked = {
+                            Log.d(TAG, "onSendImageClicked: Send Image button logic initiated.")
+                            if (imageToSend == null) {
+                                Log.i(TAG, "onSendImageClicked: No image selected. Launching image picker.")
+                                imagePickerLauncher.launch("image/*")
+                            } else {
                                 selectedDevice?.let { device ->
-                                    if (textToSend.isNotBlank()) {
-                                        sendTextToDevice(device, textToSend, true)
-                                    } else {
-                                        Log.w(tag, "onSendToPrinterClicked: Text to send is blank.")
-                                        Toast.makeText(this, "Enter text for printer", Toast.LENGTH_SHORT).show()
-                                    }
+                                    imageToSend?.let { bitmap ->
+                                        Log.i(TAG, "onSendImageClicked: Image and device selected. Attempting to send to ${device.getSafeName(this@MainActivity)}.")
+                                        sendImageToDevice(device, bitmap)
+                                    } ?: Log.w(TAG, "onSendImageClicked: Image is null even after check, should not happen.")
                                 } ?: run {
-                                    Log.w(tag, "onSendToPrinterClicked: No device selected for printer.")
-                                    Toast.makeText(this, "No device selected", Toast.LENGTH_SHORT).show()
+                                    Log.w(TAG, "onSendImageClicked: No device selected for image sending.")
+                                    Toast.makeText(this, "No device selected for image sending", Toast.LENGTH_SHORT).show()
                                 }
                             }
-                        )
-                    } else {
-                        Text(
-                            text = "This feature requires Android 12 (API 31) or higher.",
-                            modifier = Modifier.padding(innerPadding).fillMaxSize()
-                        )
-                        Log.w(tag, "setContent: BluetoothControlScreen requires API 31+. Device is running API ${Build.VERSION.SDK_INT}.")
-                    }
+                        },
+                        onSendToPrinterClicked = {
+                            Log.d(TAG, "onSendToPrinterClicked: Send to Printer button clicked.")
+                            selectedDevice?.let { device ->
+                                if (textToSend.isNotBlank()) {
+                                    sendTextToDevice(device, textToSend)
+                                } else {
+                                    Log.w(TAG, "onSendToPrinterClicked: Text to send is blank.")
+                                    Toast.makeText(this, "Enter text for printer", Toast.LENGTH_SHORT).show()
+                                }
+                            } ?: run {
+                                Log.w(TAG, "onSendToPrinterClicked: No device selected for printer.")
+                                Toast.makeText(this, "No device selected", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
                 }
             }
         }
-        Log.d(tag, "onCreate: Activity created and content set.")
     }
 
-    private fun isBluetoothAdapterReady(): Boolean {
-        if (bluetoothAdapter == null) {
-            Log.e(tag, "isBluetoothAdapterReady: BluetoothAdapter is null.")
-            Toast.makeText(this, "Bluetooth not supported on this device.", Toast.LENGTH_SHORT).show()
-            return false
-        }
-        if (bluetoothAdapter?.isEnabled != true) { 
-            Log.w(tag, "isBluetoothAdapterReady: Bluetooth is not enabled.")
-            Toast.makeText(this, "Bluetooth is not enabled. Please enable it.", Toast.LENGTH_LONG).show()
-            return false
-        }
-        return true
-    }
-
-    private fun addBondedDevicesToList() {
-        Log.d(tag, "addBondedDevicesToList: Attempting to add bonded devices.")
-        if (bluetoothAdapter == null) {
-            Log.w(tag, "addBondedDevicesToList: BluetoothAdapter is null. Cannot get bonded devices.")
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.w(tag, "addBondedDevicesToList: BLUETOOTH_CONNECT permission not granted for Android S+. Cannot get bonded devices.")
-            return
-        }
-
-        try {
-            val bondedDevices: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices 
-            if (bondedDevices.isNullOrEmpty()) {
-                Log.i(tag, "addBondedDevicesToList: No bonded devices found.")
-            } else {
-                Log.i(tag, "addBondedDevicesToList: Found ${bondedDevices.size} bonded devices.")
-                bondedDevices.forEach { device ->
-                    val deviceName = device.getSafeName(this@MainActivity)
-                    val deviceAddress = device.address
-                    if (device !in discoveredDevices) {
-                        discoveredDevices.add(device)
-                        Log.d(tag, "addBondedDevicesToList: Added bonded device: $deviceName ($deviceAddress)")
-                    } else {
-                        Log.d(tag, "addBondedDevicesToList: Bonded device $deviceName ($deviceAddress) already in list.")
-                    }
-                }
-            }
-        } catch (e: SecurityException) {
-            Log.e(tag, "addBondedDevicesToList: SecurityException while getting bonded devices. ${e.message}", e)
-        }
-    }
-
+    @SuppressLint("InlinedApi") // For BLUETOOTH_SCAN, BLUETOOTH_CONNECT
     private fun checkAndRequestPermissions() {
-        Log.d(tag, "checkAndRequestPermissions: Checking Bluetooth adapter and permissions.")
-        if (!isBluetoothAdapterReady()) return
+        Log.d(TAG, "checkAndRequestPermissions: Checking permissions.")
+        val adapter = bluetoothAdapter
+        if (adapter == null) {
+            Log.e(TAG, "checkAndRequestPermissions: Bluetooth not supported on this device.")
+            Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!adapter.isEnabled) {
+            Log.i(TAG, "checkAndRequestPermissions: Bluetooth not enabled. Requesting...")
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            // BLUETOOTH_CONNECT is needed for ACTION_REQUEST_ENABLE on S+
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                @Suppress("DEPRECATION") 
+                startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT) 
+            } else {
+                 Log.w(TAG, "checkAndRequestPermissions: BLUETOOTH_CONNECT permission needed to request enabling Bluetooth.")
+                 Toast.makeText(this, "Please enable Bluetooth via System Settings or grant Connect permission.", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
 
         val requiredPermissions = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                Log.i(tag, "checkAndRequestPermissions: BLUETOOTH_SCAN permission needed.")
                 requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
             }
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                Log.i(tag, "checkAndRequestPermissions: BLUETOOTH_CONNECT permission needed.")
                 requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
             }
         }
-        // Permissions for image picker (add if not present)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
-                 Log.i(tag, "checkAndRequestPermissions: READ_MEDIA_IMAGES permission needed for Android 13+.")
-                requiredPermissions.add(Manifest.permission.READ_MEDIA_IMAGES)
-            }
-        } else if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) { // READ_EXTERNAL_STORAGE for API 28 and below
-             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                Log.i(tag, "checkAndRequestPermissions: READ_EXTERNAL_STORAGE permission needed for older APIs.")
-                requiredPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        }
-        // For API 29-32, READ_EXTERNAL_STORAGE is usually sufficient if declared, but scoped storage applies.
-        // For simplicity here, we ensure at least one form of read permission is requested if needed.
-        // Consider more granular checks based on specific Android version nuances if issues arise.
-
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            Log.i(tag, "checkAndRequestPermissions: ACCESS_FINE_LOCATION permission needed.")
             requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
+
         if (requiredPermissions.isNotEmpty()) {
-            Log.i(tag, "checkAndRequestPermissions: Requesting permissions: ${requiredPermissions.joinToString()}")
+            Log.i(TAG, "checkAndRequestPermissions: Requesting permissions: ${requiredPermissions.joinToString()}")
             requestBluetoothPermissionsLauncher.launch(requiredPermissions.toTypedArray())
         } else {
-            Log.i(tag, "checkAndRequestPermissions: All required permissions already granted. Starting discovery.")
+            Log.i(TAG, "checkAndRequestPermissions: All necessary permissions already granted. Starting discovery.")
             startBluetoothDiscovery()
         }
     }
-
-    private fun startBluetoothDiscovery() {
-        Log.d(tag, "startBluetoothDiscovery: Attempting to start.")
-        if (!isBluetoothAdapterReady()) return
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(tag, "startBluetoothDiscovery: BLUETOOTH_SCAN permission not granted. Cannot start/manage discovery.")
-            Toast.makeText(this, "BLUETOOTH_SCAN permission needed to discover devices.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (bluetoothAdapter?.isDiscovering == true) {
-            Log.i(tag, "startBluetoothDiscovery: Discovery already in progress. Cancelling existing.")
-            val cancelled = bluetoothAdapter?.cancelDiscovery() 
-            Log.d(tag, "startBluetoothDiscovery: Existing discovery cancellation attempted. Success: $cancelled")
-        }
-
-        Log.d(tag, "startBluetoothDiscovery: Clearing discoveredDevices list and selectedDevice.")
-        discoveredDevices.clear()
-        selectedDevice = null
-
-        Log.i(tag, "startBluetoothDiscovery: Adding bonded devices before starting new discovery.")
-        addBondedDevicesToList()
-
-        Log.d(tag, "startBluetoothDiscovery: Attempting to call bluetoothAdapter.startDiscovery().")
-        val discoveryStarted = bluetoothAdapter?.startDiscovery() 
-
-        if (discoveryStarted == true) {
-            Log.i(tag, "startBluetoothDiscovery: Discovery process started successfully.")
-            Toast.makeText(this, "Scanning for devices...", Toast.LENGTH_SHORT).show()
-        } else {
-            Log.e(tag, "startBluetoothDiscovery: bluetoothAdapter.startDiscovery() returned false or adapter is null.")
-            Toast.makeText(this, "Failed to start discovery. Adapter might be busy or check logs.", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun sendTextToDevice(device: BluetoothDevice, text: String, appendNewline: Boolean) {
-        val deviceNameForLog = device.getSafeName(this@MainActivity)
-        val deviceAddressForLog = device.address ?: "Endereco_Desconhecido"
-        val textToSendProcessed = if (appendNewline) "\n\n${text}\n\n" else text
-        val logMessageSuffix = if (appendNewline) " (printer formatted: \\n\\nTEXT\\n\\n)" else ""
-
-        Log.d(tag, "sendTextToDevice: Iniciando envio para $deviceNameForLog ($deviceAddressForLog). Texto processado: '$textToSendProcessed'$logMessageSuffix")
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(tag, "sendTextToDevice: Permissão BLUETOOTH_CONNECT não concedida.")
-            Toast.makeText(this, "Permissão BLUETOOTH_CONNECT necessária para enviar dados.", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        if (bluetoothAdapter?.isDiscovering == true) {
-            Log.i(tag, "sendTextToDevice: Descoberta em progresso. Tentando cancelar.")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                Log.w(tag, "sendTextToDevice: Permissão BLUETOOTH_SCAN não concedida. Não é possível cancelar a descoberta em andamento.")
+    
+    @Deprecated("onActivityResult is deprecated but used here for startActivityForResult")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION") 
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_ENABLE_BT) {
+            if (resultCode == RESULT_OK) {
+                Log.i(TAG, "onActivityResult: Bluetooth enabled by user.")
+                checkAndRequestPermissions() 
             } else {
-                val cancelled = bluetoothAdapter?.cancelDiscovery()
-                Log.d(tag, "sendTextToDevice: Tentativa de cancelamento da descoberta. Sucesso: $cancelled")
-            }
-        }
-
-        lifecycleScope.launch {
-            val maxRetries = 3
-            var currentRetry = 0
-            var operationSuccessful = false
-
-            while (currentRetry < maxRetries && !operationSuccessful) {
-                var localSocket: BluetoothSocket? = null
-                var localOutputStream: OutputStream? = null
-                currentRetry++ 
-
-                Log.d(tag, "sendTextToDevice Coroutine: Tentativa ${currentRetry}/${maxRetries} para $deviceNameForLog.")
-
-                try {
-                    Log.d(tag, "sendTextToDevice Coroutine: Criando RfcommSocket para UUID: $sppUuid.")
-                    localSocket = device.createRfcommSocketToServiceRecord(sppUuid)
-                    
-                    val escByte: Byte = 0x1B
-                    val atByte: Byte = 0x40
-                    val initPrinterCommand = byteArrayOf(escByte, atByte)                    
-                    val textBytes = textToSendProcessed.toByteArray(Charset.forName("CP437")) // Or other relevant charset for your printer
-                    val dataToSend = initPrinterCommand + textBytes
-
-                    withContext(Dispatchers.IO) {
-                        Log.i(tag, "sendTextToDevice Coroutine (IO): Tentando conectar socket local.")
-                        localSocket?.connect()
-                        Log.i(tag, "sendTextToDevice Coroutine (IO): Socket local conectado.")
-                        localOutputStream = localSocket?.outputStream
-                        if (localOutputStream == null) {
-                            Log.e(tag, "sendTextToDevice Coroutine (IO): Stream de saída local é nulo.")
-                            throw IOException("Stream de saída local é nulo.")
-                        }
-                        Log.d(tag, "sendTextToDevice Coroutine (IO): Escrevendo ${dataToSend.size} bytes.")
-                        localOutputStream?.write(dataToSend)
-                        localOutputStream?.flush()
-                    }
-                    operationSuccessful = true
-                    Log.i(tag, "sendTextToDevice Coroutine: Texto enviado com sucesso para $deviceNameForLog$logMessageSuffix na tentativa $currentRetry.")
-                    Toast.makeText(this@MainActivity, "Texto enviado para $deviceNameForLog$logMessageSuffix (Tentativa $currentRetry)", Toast.LENGTH_SHORT).show()
-
-                } catch (e: IOException) {
-                    Log.e(tag, "sendTextToDevice Coroutine: IOException na tentativa ${currentRetry}/${maxRetries} para $deviceNameForLog: ${e.message}", e)
-                    if (currentRetry >= maxRetries) {
-                        Log.e(tag, "sendTextToDevice Coroutine: Número máximo de tentativas atingido para $deviceNameForLog.")
-                        Toast.makeText(this@MainActivity, "Erro ao enviar para $deviceNameForLog após $maxRetries tentativas: ${e.message}", Toast.LENGTH_LONG).show()
-                    } else {
-                        val delayMillis = 1000L * currentRetry 
-                        Log.i(tag, "sendTextToDevice Coroutine: Aguardando ${delayMillis}ms antes da próxima tentativa.")
-                        Toast.makeText(this@MainActivity, "Falha ao enviar, tentando novamente... (Tentativa $currentRetry)", Toast.LENGTH_SHORT).show()
-                        delay(delayMillis)
-                    }
-                } catch (se: SecurityException) {
-                    Log.e(tag, "sendTextToDevice Coroutine: SecurityException para $deviceNameForLog: ${se.message}", se)
-                    Toast.makeText(this@MainActivity, "Erro de permissão com $deviceNameForLog: ${se.message}", Toast.LENGTH_LONG).show()
-                    break 
-                } finally {
-                    Log.d(tag, "sendTextToDevice Coroutine: Bloco finally na tentativa $currentRetry.")
-                    try {
-                        localOutputStream?.close()
-                        Log.d(tag, "sendTextToDevice Coroutine: Stream de saída local fechado.")
-                    } catch (e: IOException) {
-                        Log.e(tag, "sendTextToDevice Coroutine: IOException ao fechar stream de saída local: ${e.message}", e)
-                    }
-                    try {
-                        localSocket?.close()
-                        Log.d(tag, "sendTextToDevice Coroutine: Socket local fechado.")
-                    } catch (e: IOException) {
-                        Log.e(tag, "sendTextToDevice Coroutine: IOException ao fechar socket local: ${e.message}", e)
-                    }
-                }
-            }
-            if (!operationSuccessful && currentRetry >= maxRetries) {
-                 Log.w(tag, "sendTextToDevice Coroutine: Operação final falhou após $maxRetries tentativas para $deviceNameForLog.")
+                Log.w(TAG, "onActivityResult: Bluetooth enabling was cancelled or failed.")
+                Toast.makeText(this, "Bluetooth is required to scan for devices.", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    private fun sendImageToDevice(device: BluetoothDevice, image: Bitmap?) {
-        val deviceNameForLog = device.getSafeName(this@MainActivity)
-        Log.d(tag, "sendImageToDevice: Tentando enviar imagem para $deviceNameForLog.")
 
-        if (image == null) {
-            Log.w(tag, "sendImageToDevice: Imagem é nula. Nenhuma imagem para enviar.")
-            Toast.makeText(this, "Nenhuma imagem selecionada para enviar.", Toast.LENGTH_SHORT).show()
+    @SuppressLint("MissingPermission") // Permissions (SCAN, CONNECT/ADMIN, FINE_LOCATION) are checked by canScan
+    private fun startBluetoothDiscovery() {
+        Log.d(TAG, "startBluetoothDiscovery: Attempting to start discovery.")
+        val adapter = bluetoothAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            Log.e(TAG, "startBluetoothDiscovery: Bluetooth adapter not available or not enabled.")
+            Toast.makeText(this, "Please enable Bluetooth.", Toast.LENGTH_SHORT).show()
             return
         }
 
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(tag, "sendImageToDevice: Permissão BLUETOOTH_CONNECT não concedida.")
-            Toast.makeText(this, "Permissão BLUETOOTH_CONNECT necessária para enviar imagem.", Toast.LENGTH_LONG).show()
-            return
+        val canScan = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED // Connect also needed for discovery results
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) == PackageManager.PERMISSION_GRANTED && // For discovery
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADMIN) == PackageManager.PERMISSION_GRANTED    // For starting/stopping discovery
+        }
+
+        if (!canScan) {
+             Log.e(TAG, "startBluetoothDiscovery: Missing necessary permissions to start discovery.")
+             Toast.makeText(this, "Permissions required to start scan. Check settings.", Toast.LENGTH_LONG).show()
+             // Optionally, call checkAndRequestPermissions() again or guide user to settings
+             checkAndRequestPermissions() // Re-trigger permission flow if scan is attempted without sufficient permissions
+             return
+        }
+
+        if (adapter.isDiscovering) {
+            Log.d(TAG, "startBluetoothDiscovery: Already discovering. Stopping previous discovery.")
+            adapter.cancelDiscovery() // BLUETOOTH_SCAN on S+, BLUETOOTH_ADMIN on pre-S. Assumed granted by canScan check.
         }
         
-        // TODO: Implementar a lógica de conversão da imagem e envio para a impressora
-        // Isso envolverá a conversão do Bitmap para um formato de byte array
-        // que a impressora entende (ex: monocromático, comandos ESC/POS).
-        // A função converterBitmapParaFormatoImpressora(image) será crucial aqui.
+        discoveredDevices.clear() 
+        addBondedDevicesToList() 
 
-        lifecycleScope.launch {
-            Log.i(tag, "sendImageToDevice Coroutine: [Placeholder] Iniciando lógica de envio de imagem para $deviceNameForLog.")
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "[Placeholder] Preparando para enviar imagem para $deviceNameForLog...", Toast.LENGTH_SHORT).show()
-            }
-            
-            // Simulação de conversão e envio (substituir com lógica real)
-            // val imageData: ByteArray? = convertBitmapToPrinterFormat(image) // Função a ser implementada
-            // if (imageData == null) {
-            //     Log.e(tag, "sendImageToDevice Coroutine: Falha ao converter imagem para formato da impressora.")
-            //     Toast.makeText(this@MainActivity, "Erro ao converter imagem.", Toast.LENGTH_LONG).show()
-            //     return@launch
-            // }
+        Log.i(TAG, "startBluetoothDiscovery: Starting Bluetooth discovery...")
+        val discoveryStarted = adapter.startDiscovery() // BLUETOOTH_SCAN on S+, BLUETOOTH_ADMIN on pre-S. Assumed granted by canScan check.
+        
+        if (discoveryStarted) {
+            Toast.makeText(this, "Scanning for devices...", Toast.LENGTH_SHORT).show()
+        } else {
+            Log.e(TAG, "startBluetoothDiscovery: Failed to start Bluetooth discovery despite passing permission checks. System error?")
+            Toast.makeText(this, "Failed to start scan. Please try again.", Toast.LENGTH_LONG).show()
+        }
+    }
 
-            var localSocket: BluetoothSocket? = null
-            var localOutputStream: OutputStream? = null
-            try {
-                Log.d(tag, "sendImageToDevice Coroutine: Criando RfcommSocket para $deviceNameForLog.")
-                localSocket = device.createRfcommSocketToServiceRecord(sppUuid)
-                
-                withContext(Dispatchers.IO) {
-                    Log.i(tag, "sendImageToDevice Coroutine (IO): Tentando conectar socket para $deviceNameForLog.")
-                    localSocket?.connect()
-                    Log.i(tag, "sendImageToDevice Coroutine (IO): Socket conectado para $deviceNameForLog.")
-                    localOutputStream = localSocket?.outputStream
-                    if (localOutputStream == null) {
-                        Log.e(tag, "sendImageToDevice Coroutine (IO): Stream de saída nulo para $deviceNameForLog.")
-                        throw IOException("Output stream is null.")
-                    }
-                    
-                    // AQUI VOCÊ DEVE CHAMAR A FUNÇÃO DE CONVERSÃO E ENVIAR OS DADOS
-                    // Exemplo:
-                    // val printerData = convertBitmapToEscPos(image) // Esta função precisa ser criada!
-                    // localOutputStream?.write(printerData)
-                    // localOutputStream?.flush()
-                    // Log.i(tag, "sendImageToDevice Coroutine (IO): [Placeholder] Dados da imagem enviados para $deviceNameForLog.")
+    @SuppressLint("MissingPermission") // BLUETOOTH_CONNECT checked for S+, legacy BLUETOOTH for older
+    private fun addBondedDevicesToList() {
+        Log.d(TAG, "addBondedDevicesToList: Adding bonded devices.")
+        val adapter = bluetoothAdapter
+        if (adapter == null) {
+            Log.w(TAG, "addBondedDevicesToList: BluetoothAdapter is null.")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "addBondedDevicesToList: BLUETOOTH_CONNECT permission not granted. Cannot get bonded devices on Android S+.")
+            // Toast.makeText(this, "Connect permission needed for bonded devices", Toast.LENGTH_SHORT).show() // Optional user feedback
+            return
+        }
+        // Pre-S, BLUETOOTH permission would have been implicitly required for adapter.bondedDevices if it's a system check
 
-                    // Por enquanto, apenas um log e Toast de placeholder
-                     withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "[Placeholder] Lógica de envio real da imagem aqui.", Toast.LENGTH_LONG).show()
-                     }
+        try {
+            val bondedBtDevices: Set<BluetoothDevice>? = adapter.bondedDevices // Name changed to avoid conflict
+            bondedBtDevices?.forEach { device ->
+                 val deviceName = device.getSafeName(this)
+                 val deviceAddress = device.address ?: "Unknown Address"
+                Log.d(TAG, "addBondedDevicesToList: Found bonded device: $deviceName ($deviceAddress)")
+                if (device !in discoveredDevices) {
+                    discoveredDevices.add(device)
+                    Log.i(TAG, "addBondedDevicesToList: Bonded device $deviceName ($deviceAddress) added to list.")
                 }
+            }
+        } catch (se: SecurityException) {
+            Log.e(TAG, "addBondedDevicesToList: SecurityException while getting bonded devices.", se)
+        }
+    }
+
+    @SuppressLint("MissingPermission") // BLUETOOTH_CONNECT checked for S+
+    private fun sendTextToDevice(device: BluetoothDevice, text: String) {
+        val deviceName = device.getSafeName(this)
+        Log.d(TAG, "sendTextToDevice: Attempting to send text to $deviceName")
+        lifecycleScope.launch(Dispatchers.IO) {
+            var socket: BluetoothSocket? = null
+            var outputStream: OutputStream? = null
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                    Log.e(TAG, "sendTextToDevice: BLUETOOTH_CONNECT permission not granted for $deviceName.")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "BLUETOOTH_CONNECT permission needed for $deviceName", Toast.LENGTH_LONG).show()
+                    }
+                    return@launch
+                }
+                Log.d(TAG, "sendTextToDevice: Creating RfcommSocket for $deviceName.")
+                socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+                socket.connect() 
+                Log.i(TAG, "sendTextToDevice: Socket connected to $deviceName.")
+                outputStream = socket.outputStream
+                
+                val textForPrinter = text + "\n\n\n" 
+                val bytesToSend = textForPrinter.toByteArray(Charset.forName("CP437")) 
+
+                outputStream.write(bytesToSend)
+                outputStream.flush()
+                Log.i(TAG, "sendTextToDevice: Text sent successfully to $deviceName.")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Imagem (placeholder) 'enviada' para $deviceNameForLog!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Text sent to $deviceName", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "sendTextToDevice: SecurityException for $deviceName: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Permission error connecting to $deviceName", Toast.LENGTH_LONG).show()
                 }
             } catch (e: IOException) {
-                Log.e(tag, "sendImageToDevice Coroutine: IOException para $deviceNameForLog: ${e.message}", e)
+                Log.e(TAG, "sendTextToDevice: IOException for $deviceName: ${e.message}", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Erro de I/O ao enviar imagem para $deviceNameForLog: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Error sending to $deviceName: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                 }
-            } catch (se: SecurityException) {
-                 Log.e(tag, "sendImageToDevice Coroutine: SecurityException para $deviceNameForLog: ${se.message}", se)
-                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Erro de permissão com $deviceNameForLog: ${se.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-            finally {
-                Log.d(tag, "sendImageToDevice Coroutine: Bloco finally para $deviceNameForLog.")
+            } finally {
+                Log.d(TAG, "sendTextToDevice: Cleaning up for $deviceName.")
                 try {
-                    localOutputStream?.close()
-                    Log.d(tag, "sendImageToDevice Coroutine: Stream de saída fechado para $deviceNameForLog.")
-                } catch (e: IOException) {
-                    Log.e(tag, "sendImageToDevice Coroutine: IOException ao fechar stream para $deviceNameForLog: ${e.message}", e)
+                    outputStream?.close()
+                    Log.d(TAG, "sendTextToDevice: Output stream closed for $deviceName.")
+                } catch (ioe: IOException) {
+                    Log.e(TAG, "sendTextToDevice: Error closing output stream for $deviceName.", ioe)
                 }
                 try {
-                    localSocket?.close()
-                    Log.d(tag, "sendImageToDevice Coroutine: Socket fechado para $deviceNameForLog.")
-                } catch (e: IOException) {
-                    Log.e(tag, "sendImageToDevice Coroutine: IOException ao fechar socket para $deviceNameForLog: ${e.message}", e)
+                    socket?.close()
+                    Log.d(TAG, "sendTextToDevice: Socket closed for $deviceName.")
+                } catch (ioe: IOException) {
+                    Log.e(TAG, "sendTextToDevice: Error closing socket for $deviceName.", ioe)
                 }
             }
-             // Limpar a imagem selecionada após a tentativa de envio para que o usuário possa selecionar uma nova
-            imageToSend = null
         }
     }
 
 
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(tag, "onDestroy: Activity destroying.")
-        try {
-            unregisterReceiver(discoveryReceiver)
-            Log.i(tag, "onDestroy: discoveryReceiver unregistered.")
-        } catch (e: IllegalArgumentException) {
-            Log.w(tag, "onDestroy: discoveryReceiver was not registered or already unregistered. ${e.message}")
+    @SuppressLint("MissingPermission") // BLUETOOTH_CONNECT checked for S+
+    private fun sendImageToDevice(device: BluetoothDevice, bitmapToPrint: Bitmap) {
+        val deviceName = device.getSafeName(this)
+        val deviceAddress = device.address
+        Log.i(TAG, "sendImageToDevice: Initiating image send to $deviceName ($deviceAddress)")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "sendImageToDevice: BLUETOOTH_CONNECT permission not granted for $deviceName.")
+            Toast.makeText(this, "BLUETOOTH_CONNECT permission needed to print to $deviceName", Toast.LENGTH_LONG).show()
+            return
         }
 
-        if (bluetoothAdapter?.isDiscovering == true) {
-            Log.i(tag, "onDestroy: Discovery in progress. Attempting to cancel.")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                Log.w(tag, "onDestroy: BLUETOOTH_SCAN permission not granted. Cannot cancel discovery (Android S+).")
-            } else {
-                val cancelled = bluetoothAdapter?.cancelDiscovery() 
-                Log.d(tag, "onDestroy: Discovery cancellation attempted. Success: $cancelled")
+        lifecycleScope.launch(Dispatchers.IO) {
+            var printerConnection: BluetoothConnection? = null
+            try {
+                Log.d(TAG, "sendImageToDevice: Searching for Bluetooth printer connection for address: $deviceAddress")
+                
+                val connectionsList = BluetoothPrintersConnections().list
+                
+                Log.i(TAG, "sendImageToDevice: Found ${connectionsList?.size ?: 0} connections from library.")
+                connectionsList?.forEachIndexed { index, conn -> 
+                    Log.d(TAG, "sendImageToDevice: Library conn [$index]: Name=${conn.device.name}, Address=${conn.device.address}")
+                }
+                printerConnection = connectionsList?.firstOrNull { it.device.address == deviceAddress }
+
+
+                if (printerConnection == null) {
+                    Log.w(TAG, "sendImageToDevice: Device $deviceAddress not found in library's list or list was null. Attempting direct connection.")
+                    try {
+                        printerConnection = BluetoothConnection(device) 
+                        Log.i(TAG, "sendImageToDevice: Direct BluetoothConnection object created for $deviceAddress.")
+                         // If direct creation is successful, printerConnection is no longer null here.
+                    } catch (e: Exception) {
+                        Log.e(TAG, "sendImageToDevice: Error creating direct BluetoothConnection for $deviceAddress: ${e.message}", e)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Failed to create direct connection for $deviceName.", Toast.LENGTH_LONG).show()
+                        }
+                        return@launch 
+                    }
+                    // If we reach here, printerConnection was successfully assigned in the try block above.
+                    // The redundant 'if (printerConnection == null)' check has been removed.
+                }
+                
+                // If we reach here, printerConnection should be non-null.
+
+                Log.i(TAG, "sendImageToDevice: Printer connection object obtained for $deviceName. Attempting to connect.")
+                try {
+                    // Since printerConnection is confirmed non-null by the logic above (either found in list or created directly, or function returned)
+                    if (!printerConnection.isConnected) { 
+                         Log.d(TAG, "sendImageToDevice: Explicitly connecting printerConnection for $deviceName")
+                         printerConnection.connect()
+                    }
+                } catch (e: Exception) {
+                     Log.e(TAG, "sendImageToDevice: Error explicitly connecting BluetoothConnection for $deviceName: ${e.message}", e)
+                     withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Failed to connect to $deviceName (library): ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                    try { printerConnection.disconnect() } catch (de: Exception) { Log.e(TAG, "Disconnect exception",de) } 
+                    return@launch
+                }
+
+
+                Log.i(TAG, "sendImageToDevice: Creating EscPosPrinter for $deviceName.")
+                // printerConnection is non-null here
+                val printer = EscPosPrinter(printerConnection, 203, 48f, 32)
+                Log.i(TAG, "sendImageToDevice: EscPosPrinter created. Attempting to print image to $deviceName.")
+                
+                val formattedText = "[C]<img>${PrinterTextParserImg.bitmapToHexadecimalString(printer, bitmapToPrint)}</img>\n"
+                printer.printFormattedTextAndCut(formattedText)
+
+                Log.i(TAG, "sendImageToDevice: Image sent to EscPosPrinter for $deviceName.")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Image sent to $deviceName", Toast.LENGTH_SHORT).show()
+                }
+
+            } catch (e: Exception) { 
+                Log.e(TAG, "sendImageToDevice: Error sending image to $deviceName: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error printing image to $deviceName: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                Log.d(TAG, "sendImageToDevice: Cleaning up EscPosPrinter connection for $deviceName.")
+                try {
+                    printerConnection?.disconnect()
+                    Log.i(TAG, "sendImageToDevice: EscPosPrinter connection disconnected for $deviceName.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "sendImageToDevice: Error disconnecting EscPosPrinter connection for $deviceName: ${e.message}", e)
+                }
             }
         }
-        Log.d(tag, "onDestroy: Activity destroyed.")
+    }
+
+
+    @SuppressLint("MissingPermission") // Permissions checked before calling cancelDiscovery
+    override fun onDestroy() {
+        Log.d(TAG, "onDestroy: Activity being destroyed.")
+        super.onDestroy()
+        val adapter = bluetoothAdapter
+        if (adapter != null) {
+            val canStopDiscovery = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            } else {
+                 ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADMIN) == PackageManager.PERMISSION_GRANTED
+            }
+
+            if (canStopDiscovery && adapter.isDiscovering) {
+                 Log.d(TAG, "onDestroy: Stopping Bluetooth discovery.")
+                 adapter.cancelDiscovery()
+            } else if (adapter.isDiscovering) {
+                 Log.w(TAG, "onDestroy: Was discovering but required permission for cancelDiscovery not granted (SCAN for S+, ADMIN for pre-S).")
+            }
+        }
+        unregisterReceiver(discoveryReceiver)
+        Log.d(TAG, "onDestroy: discoveryReceiver unregistered.")
     }
 }
