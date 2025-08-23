@@ -38,26 +38,27 @@ fun BluetoothControlScreen(
     onScanClicked: () -> Unit,
     onDeviceSelected: (BluetoothDevice) -> Unit,
     onSendImageClicked: () -> Unit,
-    onSendToPrinterClicked: () -> Unit
+    onSendToPrinterClicked: () -> Unit,
+    onPreviewImageClicked: () -> Unit // Added new callback
 ) {
     val context = LocalContext.current
     Column(modifier = modifier.padding(16.dp)) {
         Button(onClick = onScanClicked, modifier = Modifier.fillMaxWidth()) {
-            Text("Scan for Devices")
+            Text("Procurar Dispositivos")
         }
         Spacer(modifier = Modifier.height(8.dp))
 
         if (devices.isEmpty()) {
-            Text("No devices found yet. Click 'Scan' to start.")
+            Text("Nenhum dispositivo encontrado ainda. Clique em 'Procurar' para começar.")
         } else {
-            Text("Tap a device to select:")
+            Text("Toque em um dispositivo para selecionar:")
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 modifier = Modifier.weight(1f).padding(vertical = 8.dp)
             ) {
                 items(items = devices, key = { it.address }) { device ->
                     val deviceNameString = device.getSafeName(context)
-                    val deviceAddressString = device.address ?: "Unknown Address"
+                    val deviceAddressString = device.address ?: "Endereço Desconhecido" // Also translated this
 
                     Card(
                         modifier = Modifier
@@ -70,7 +71,7 @@ fun BluetoothControlScreen(
                             Text(text = deviceAddressString)
                             if (device == selectedDevice) {
                                 Text(
-                                    text = "(Selected)",
+                                    text = "(Selecionado)",
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
                             }
@@ -85,11 +86,12 @@ fun BluetoothControlScreen(
         imageToSend?.let {
             Image(
                 bitmap = it.asImageBitmap(),
-                contentDescription = "Selected Image Preview",
+                contentDescription = "Pré-visualização da Imagem Selecionada",
                 modifier = Modifier
                     .size(100.dp)
                     .padding(bottom = 8.dp)
-                    .align(Alignment.CenterHorizontally),
+                    .align(Alignment.CenterHorizontally)
+                    .clickable { onPreviewImageClicked() }, // Made image clickable
                 contentScale = ContentScale.Fit
             )
         }
@@ -97,7 +99,7 @@ fun BluetoothControlScreen(
         OutlinedTextField(
             value = textToSend,
             onValueChange = onTextChange,
-            label = { Text("Enter text to print") },
+            label = { Text("Digite o texto para imprimir") },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -107,7 +109,7 @@ fun BluetoothControlScreen(
             enabled = selectedDevice != null, // Still need a device to be selected
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (imageToSend == null) "Select Image" else "Send Selected Image")
+            Text(if (imageToSend == null) "Selecionar Imagem" else "Enviar Imagem Selecionada")
         }
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -116,7 +118,7 @@ fun BluetoothControlScreen(
             enabled = selectedDevice != null && textToSend.isNotBlank(),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Send to Selected Printer")
+            Text("Enviar para Impressora Selecionada")
         }
     }
 }
@@ -135,7 +137,8 @@ fun DefaultPreview() {
             onScanClicked = {},
             onDeviceSelected = {},
             onSendImageClicked = {},
-            onSendToPrinterClicked = {}
+            onSendToPrinterClicked = {},
+            onPreviewImageClicked = {} // Added for preview
         )
     }
 }
