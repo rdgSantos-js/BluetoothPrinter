@@ -231,7 +231,9 @@ class MainActivity : ComponentActivity() {
                                 selectedDevice?.let { device ->
                                     imageToSend?.let { bitmap ->
                                         Log.i(TAG, "onSendImageClicked: Image and device selected. Attempting to send to ${device.getSafeName(this@MainActivity)}.")
-                                        sendImageToDevice(device, bitmap)
+                                        sendImageToDevice(device, bitmap) {
+                                            imageToSend = null // Clear image selection on success
+                                        }
                                     } ?: Log.w(TAG, "onSendImageClicked: Image is null even after check, should not happen.")
                                 } ?: run {
                                     Log.w(TAG, "onSendImageClicked: No device selected for image sending.")
@@ -466,7 +468,7 @@ class MainActivity : ComponentActivity() {
 
 
     @SuppressLint("MissingPermission") 
-    private fun sendImageToDevice(device: BluetoothDevice, bitmapToPrint: Bitmap) {
+    private fun sendImageToDevice(device: BluetoothDevice, bitmapToPrint: Bitmap, onSendSuccess: () -> Unit) {
         val deviceName = device.getSafeName(this)
         val deviceAddress = device.address
         Log.i(TAG, "sendImageToDevice: Initiating image send to $deviceName ($deviceAddress)")
@@ -506,7 +508,7 @@ class MainActivity : ComponentActivity() {
                 Log.i(TAG, "sendImageToDevice: Image sent to EscPosPrinter for $deviceName.")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, "Imagem enviada para $deviceName", Toast.LENGTH_SHORT).show()
-                    imageToSend = null
+                    onSendSuccess() // Call the callback on success
                 }
 
             } catch (e: Exception) { 

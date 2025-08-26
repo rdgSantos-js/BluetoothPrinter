@@ -15,11 +15,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme // Added import for MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap // To convert Bitmap to ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -58,13 +61,21 @@ fun BluetoothControlScreen(
             ) {
                 items(items = devices, key = { it.address }) { device ->
                     val deviceNameString = device.getSafeName(context)
-                    val deviceAddressString = device.address ?: "Endereço Desconhecido" // Also translated this
+                    val deviceAddressString = device.address ?: "Endereço Desconhecido"
 
                     Card(
                         modifier = Modifier
                             .padding(4.dp)
                             .fillMaxWidth()
-                            .clickable { onDeviceSelected(device) }
+                            .clickable { onDeviceSelected(device) },
+                        colors = if (device == selectedDevice) {
+                            CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primary, // Changed to MaterialTheme.colorScheme.primary
+                                contentColor = Color.White
+                            )
+                        } else {
+                            CardDefaults.cardColors() // Uses default theme colors
+                        }
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
                             Text(text = deviceNameString)
