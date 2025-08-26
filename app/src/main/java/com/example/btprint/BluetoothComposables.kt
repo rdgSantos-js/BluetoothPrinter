@@ -37,17 +37,22 @@ fun BluetoothControlScreen(
     devices: List<BluetoothDevice>,
     selectedDevice: BluetoothDevice?,
     textToSend: String,
-    imageToSend: Bitmap?, // Added imageToSend parameter
+    imageToSend: Bitmap?,
+    isPrinting: Boolean, // Added isPrinting state
     onTextChange: (String) -> Unit,
     onScanClicked: () -> Unit,
     onDeviceSelected: (BluetoothDevice) -> Unit,
     onSendImageClicked: () -> Unit,
     onSendToPrinterClicked: () -> Unit,
-    onPreviewImageClicked: () -> Unit // Added new callback
+    onPreviewImageClicked: () -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier = modifier.padding(16.dp)) {
-        Button(onClick = onScanClicked, modifier = Modifier.fillMaxWidth()) {
+        Button(
+            onClick = onScanClicked, 
+            enabled = !isPrinting, // Disable when printing
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text("Procurar Dispositivos")
         }
         Spacer(modifier = Modifier.height(8.dp))
@@ -68,14 +73,14 @@ fun BluetoothControlScreen(
                         modifier = Modifier
                             .padding(4.dp)
                             .fillMaxWidth()
-                            .clickable { onDeviceSelected(device) },
+                            .clickable(enabled = !isPrinting) { onDeviceSelected(device) }, // Disable selection when printing
                         colors = if (device == selectedDevice) {
                             CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primary, // Changed to MaterialTheme.colorScheme.primary
+                                containerColor = MaterialTheme.colorScheme.primary,
                                 contentColor = Color.White
                             )
                         } else {
-                            CardDefaults.cardColors() // Uses default theme colors
+                            CardDefaults.cardColors()
                         }
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
@@ -94,7 +99,6 @@ fun BluetoothControlScreen(
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Optional: Display the selected image preview
         imageToSend?.let {
             Image(
                 bitmap = it.asImageBitmap(),
@@ -103,7 +107,7 @@ fun BluetoothControlScreen(
                     .size(100.dp)
                     .padding(bottom = 8.dp)
                     .align(Alignment.CenterHorizontally)
-                    .clickable { onPreviewImageClicked() }, // Made image clickable
+                    .clickable(enabled = !isPrinting) { onPreviewImageClicked() }, // Disable when printing
                 contentScale = ContentScale.Fit
             )
         }
@@ -114,14 +118,15 @@ fun BluetoothControlScreen(
             label = { Text("Digite o texto para imprimir") },
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 150.dp), // Limit the maximum height
-            maxLines = 5 // Allow a certain number of lines before scrolling
+                .heightIn(max = 150.dp),
+            maxLines = 5,
+            enabled = !isPrinting // Disable when printing
         )
         Spacer(modifier = Modifier.height(8.dp))
 
         Button(
             onClick = onSendImageClicked,
-            enabled = selectedDevice != null, // Still need a device to be selected
+            enabled = selectedDevice != null && !isPrinting, // Disable when printing or no device selected
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(if (imageToSend == null) "Selecionar Imagem" else "Enviar Imagem Selecionada")
@@ -130,7 +135,7 @@ fun BluetoothControlScreen(
 
         Button(
             onClick = onSendToPrinterClicked,
-            enabled = selectedDevice != null && textToSend.isNotBlank(),
+            enabled = selectedDevice != null && textToSend.isNotBlank() && !isPrinting, // Disable when printing, no device, or blank text
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Enviar para Impressora Selecionada")
@@ -147,13 +152,14 @@ fun DefaultPreview() {
             devices = emptyList(),
             selectedDevice = null,
             textToSend = "Test Text",
-            imageToSend = null, // Pass null for preview
+            imageToSend = null,
+            isPrinting = false, // Added for preview
             onTextChange = {},
             onScanClicked = {},
             onDeviceSelected = {},
             onSendImageClicked = {},
             onSendToPrinterClicked = {},
-            onPreviewImageClicked = {} // Added for preview
+            onPreviewImageClicked = {}
         )
     }
 }

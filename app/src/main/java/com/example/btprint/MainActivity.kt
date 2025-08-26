@@ -78,6 +78,7 @@ class MainActivity : ComponentActivity() {
     private var selectedDevice by mutableStateOf<BluetoothDevice?>(null)
     private var textToSend by mutableStateOf("")
     private var imageToSend by mutableStateOf<Bitmap?>(null)
+    private var isPrinting by mutableStateOf(false) // State to control button enable/disable
 
     companion object {
         private const val TAG = "BluetoothAppTag"
@@ -213,6 +214,7 @@ class MainActivity : ComponentActivity() {
                         selectedDevice = selectedDevice,
                         textToSend = textToSend,
                         imageToSend = imageToSend,
+                        isPrinting = isPrinting, // Pass the state
                         onTextChange = { textToSend = it },
                         onScanClicked = {
                             Log.d(TAG, "onScanClicked: Scan button clicked.")
@@ -408,6 +410,12 @@ class MainActivity : ComponentActivity() {
         printAction: (printer: EscPosPrinter) -> Unit,
         onSuccessCallback: (() -> Unit)? = null
     ) {
+        if (isPrinting) {
+            Log.w(TAG, "performPrintOperation: Already printing, operation '$operationDescription' skipped.")
+            Toast.makeText(this, "Já existe uma impressão em andamento.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val deviceName = device.getSafeName(this)
         val deviceAddress = device.address
         Log.i(TAG, "performPrintOperation: Initiating $operationDescription send to $deviceName ($deviceAddress)")
@@ -420,6 +428,9 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { // Set isPrinting on the Main thread
+                isPrinting = true
+            }
             var printerConnection: BluetoothConnection? = null
             try {
                 // Attempt to get a connection (reusing or creating new)
@@ -458,6 +469,9 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "performPrintOperation: Connection disconnected for $deviceName.")
                 } catch (e: Exception) {
                     Log.e(TAG, "performPrintOperation: Error disconnecting for $deviceName: ${e.message}", e)
+                }
+                withContext(Dispatchers.Main) { // Set isPrinting on the Main thread
+                    isPrinting = false
                 }
             }
         }
