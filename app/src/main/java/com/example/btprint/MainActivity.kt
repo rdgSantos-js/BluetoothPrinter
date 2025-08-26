@@ -400,132 +400,98 @@ class MainActivity : ComponentActivity() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun sendTextToDevice(device: BluetoothDevice, text: String) {
+    private fun performPrintOperation(
+        device: BluetoothDevice,
+        operationDescription: String, // e.g., "text", "image"
+        onSuccessMessage: String,
+        onFailureMessagePrefix: String,
+        printAction: (printer: EscPosPrinter) -> Unit,
+        onSuccessCallback: (() -> Unit)? = null
+    ) {
         val deviceName = device.getSafeName(this)
         val deviceAddress = device.address
-        Log.i(TAG, "sendTextToDevice: Initiating text send to $deviceName ($deviceAddress)")
+        Log.i(TAG, "performPrintOperation: Initiating $operationDescription send to $deviceName ($deviceAddress)")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "sendTextToDevice: BLUETOOTH_CONNECT permission not granted for $deviceName.")
-            Toast.makeText(this, "Permissão BLUETOOTH_CONNECT necessária para enviar texto para $deviceName", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "performPrintOperation: BLUETOOTH_CONNECT permission not granted for $deviceName.")
+            Toast.makeText(this, "Permissão BLUETOOTH_CONNECT necessária para $operationDescription em $deviceName", Toast.LENGTH_LONG).show()
             return
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
             var printerConnection: BluetoothConnection? = null
             try {
-                Log.d(TAG, "sendTextToDevice: Searching for Bluetooth printer connection for address: $deviceAddress")
-                // Try to get from the library's list first for potential reuse
+                // Attempt to get a connection (reusing or creating new)
                 printerConnection = BluetoothPrintersConnections().list?.firstOrNull { it.device.address == deviceAddress }
-
                 if (printerConnection == null) {
-                    Log.w(TAG, "sendTextToDevice: Device $deviceAddress not found in library's list. Attempting direct connection.")
+                    Log.w(TAG, "performPrintOperation: Device $deviceAddress not in library list. Creating new connection.")
                     printerConnection = BluetoothConnection(device)
-                    Log.i(TAG, "sendTextToDevice: Direct BluetoothConnection object created for $deviceAddress.")
                 } else {
-                    Log.d(TAG, "sendTextToDevice: Reusing existing BluetoothConnection from library for $deviceName ($deviceAddress).")
+                    Log.d(TAG, "performPrintOperation: Reusing existing BluetoothConnection from library for $deviceName.")
                 }
 
-                // Attempt to connect. EscPosPrinter might also try to connect,
-                // but explicit connection here can help diagnose issues earlier.
                 if (!printerConnection.isConnected) {
-                    Log.d(TAG, "sendTextToDevice: Explicitly connecting printerConnection for $deviceName")
+                    Log.d(TAG, "performPrintOperation: Explicitly connecting for $deviceName")
                     printerConnection.connect()
                 }
-                 Log.i(TAG, "sendTextToDevice: Printer connection active for $deviceName. Creating EscPosPrinter.")
-                // Use the same printer parameters as for image printing
+                Log.i(TAG, "performPrintOperation: Connection active for $deviceName. Creating EscPosPrinter.")
                 val printer = EscPosPrinter(printerConnection, 203, 48f, 32)
                 
-                // The library handles encoding; plain text with newlines should work.
-                // Adding [L] for left alignment, and ensuring some feed with 
+                printAction(printer) // Execute the specific print logic
 
-                val textToPrint = "[L]$text\n\n\n" 
-                Log.i(TAG, "sendTextToDevice: Attempting to print text: $textToPrint to $deviceName.")
-                printer.printFormattedTextAndCut(textToPrint)
-
-                Log.i(TAG, "sendTextToDevice: Text sent to EscPosPrinter for $deviceName.")
+                Log.i(TAG, "performPrintOperation: $operationDescription sent to EscPosPrinter for $deviceName.")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Texto enviado para $deviceName", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, onSuccessMessage, Toast.LENGTH_SHORT).show()
+                    onSuccessCallback?.invoke()
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "sendTextToDevice: Error sending text to $deviceName: ${e.message}", e)
+                Log.e(TAG, "performPrintOperation: Error sending $operationDescription to $deviceName: ${e.message}", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Erro ao enviar texto para $deviceName: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "$onFailureMessagePrefix: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                 }
             } finally {
-                Log.d(TAG, "sendTextToDevice: Cleaning up EscPosPrinter connection for $deviceName.")
+                Log.d(TAG, "performPrintOperation: Cleaning up connection for $deviceName.")
                 try {
                     printerConnection?.disconnect()
-                    Log.i(TAG, "sendTextToDevice: EscPosPrinter connection disconnected for $deviceName.")
+                    Log.i(TAG, "performPrintOperation: Connection disconnected for $deviceName.")
                 } catch (e: Exception) {
-                    Log.e(TAG, "sendTextToDevice: Error disconnecting EscPosPrinter connection for $deviceName: ${e.message}", e)
+                    Log.e(TAG, "performPrintOperation: Error disconnecting for $deviceName: ${e.message}", e)
                 }
             }
         }
     }
 
+    private fun sendTextToDevice(device: BluetoothDevice, text: String) {
+        val deviceName = device.getSafeName(this) // For messages
+        performPrintOperation(
+            device = device,
+            operationDescription = "text",
+            onSuccessMessage = "Texto enviado para $deviceName",
+            onFailureMessagePrefix = "Erro ao enviar texto para $deviceName",
+            printAction = { printer ->
+                val textToPrint = "[L]$text\n\n\n"
+                Log.i(TAG, "sendTextToDevice: Attempting to print text: $textToPrint")
+                printer.printFormattedTextAndCut(textToPrint)
+            }
+        )
+    }
 
-    @SuppressLint("MissingPermission") 
     private fun sendImageToDevice(device: BluetoothDevice, bitmapToPrint: Bitmap, onSendSuccess: () -> Unit) {
-        val deviceName = device.getSafeName(this)
-        val deviceAddress = device.address
-        Log.i(TAG, "sendImageToDevice: Initiating image send to $deviceName ($deviceAddress)")
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "sendImageToDevice: BLUETOOTH_CONNECT permission not granted for $deviceName.")
-            Toast.makeText(this, "Permissão BLUETOOTH_CONNECT necessária para imprimir em $deviceName", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            var printerConnection: BluetoothConnection? = null
-            try {
-                Log.d(TAG, "sendImageToDevice: Searching for Bluetooth printer connection for address: $deviceAddress")
-                
-                // Try to get from the library's list first for potential reuse
-                printerConnection = BluetoothPrintersConnections().list?.firstOrNull { it.device.address == deviceAddress }
-
-                if (printerConnection == null) {
-                    Log.w(TAG, "sendImageToDevice: Device $deviceAddress not found in library's list. Attempting direct connection.")
-                    printerConnection = BluetoothConnection(device) 
-                    Log.i(TAG, "sendImageToDevice: Direct BluetoothConnection object created for $deviceAddress.")
-                }
-                
-                if (!printerConnection.isConnected) { 
-                         Log.d(TAG, "sendImageToDevice: Explicitly connecting printerConnection for $deviceName")
-                         printerConnection.connect()
-                }
-                Log.i(TAG, "sendImageToDevice: Printer connection active for $deviceName. Creating EscPosPrinter.")
-                val printer = EscPosPrinter(printerConnection, 203, 48f, 32)
-                Log.i(TAG, "sendImageToDevice: EscPosPrinter created. Attempting to print image to $deviceName.")
-                
+        val deviceName = device.getSafeName(this) // For messages
+        performPrintOperation(
+            device = device,
+            operationDescription = "image",
+            onSuccessMessage = "Imagem enviada para $deviceName",
+            onFailureMessagePrefix = "Erro ao imprimir imagem para $deviceName",
+            printAction = { printer ->
+                Log.i(TAG, "sendImageToDevice: Attempting to print image.")
                 val formattedText = "[C]<img>${PrinterTextParserImg.bitmapToHexadecimalString(printer, bitmapToPrint)}</img>\n"
                 printer.printFormattedTextAndCut(formattedText)
-
-                Log.i(TAG, "sendImageToDevice: Image sent to EscPosPrinter for $deviceName.")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Imagem enviada para $deviceName", Toast.LENGTH_SHORT).show()
-                    onSendSuccess() // Call the callback on success
-                }
-
-            } catch (e: Exception) { 
-                Log.e(TAG, "sendImageToDevice: Error sending image to $deviceName: ${e.message}", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Erro ao imprimir imagem para $deviceName: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                }
-            } finally {
-                Log.d(TAG, "sendImageToDevice: Cleaning up EscPosPrinter connection for $deviceName.")
-                try {
-                    printerConnection?.disconnect()
-                    Log.i(TAG, "sendImageToDevice: EscPosPrinter connection disconnected for $deviceName.")
-                } catch (e: Exception) {
-                    Log.e(TAG, "sendImageToDevice: Error disconnecting EscPosPrinter connection for $deviceName: ${e.message}", e)
-                }
-            }
-        }
+            },
+            onSuccessCallback = onSendSuccess
+        )
     }
 
     @SuppressLint("MissingPermission") 
