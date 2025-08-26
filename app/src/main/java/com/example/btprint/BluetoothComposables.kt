@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn // Import heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size // For image preview size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -111,7 +112,10 @@ fun BluetoothControlScreen(
             value = textToSend,
             onValueChange = onTextChange,
             label = { Text("Digite o texto para imprimir") },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 150.dp), // Limit the maximum height
+            maxLines = 5 // Allow a certain number of lines before scrolling
         )
         Spacer(modifier = Modifier.height(8.dp))
 
