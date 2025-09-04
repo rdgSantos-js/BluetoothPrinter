@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace 'com.example.btprint'
-    compileSdk 36
+    compileSdkVersion 36
 
     defaultConfig {
         // applicationId "com.example.btprint" // Removido para bibliotecas
@@ -61,8 +61,8 @@ dependencies {
 publishing {
     publications {
         release(MavenPublication) {
-            groupId = 'com.example.btprint'
-            artifactId = 'bluetoothprinter'
+            groupId = 'com.example'
+            artifactId = 'btprint'
             version = '1.0.0'
 
             afterEvaluate {
@@ -71,8 +71,8 @@ publishing {
         }
 
         debug(MavenPublication) {
-            groupId = 'com.example.btprint'
-            artifactId = 'bluetoothprinter-debug'
+            groupId = 'com.example'
+            artifactId = 'btprint'
             version = '1.0.0-SNAPSHOT'
 
             afterEvaluate {
