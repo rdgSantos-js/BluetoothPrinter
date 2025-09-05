@@ -8,11 +8,11 @@ plugins {
 
 android {
     namespace 'com.example.btprint'
-    compileSdkVersion 34
+    compileSdk 34
 
     defaultConfig {
         // applicationId "com.example.btprint" // Removido para bibliotecas
-        minSdk 24
+        minSdk 21
         // targetSdk 34 // targetSdk é geralmente herdado de compileSdk para bibliotecas, mas pode ser especificado
         versionCode 1
         versionName "1.0"
