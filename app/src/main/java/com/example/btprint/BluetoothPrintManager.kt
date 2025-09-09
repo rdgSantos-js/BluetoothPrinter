@@ -12,19 +12,28 @@ import android.content.Context
 import android.util.Log
 import com.dantsu.escposprinter.EscPosPrinter
 import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection
+import com.genexus.android.core.framework.GenexusModule // Added for GenexusModule
 
-object BluetoothPrintManager {
+class BluetoothPrintManager : GenexusModule { // Implements GenexusModule
 
-    private const val TAG = "BluetoothPrintManager"
+    private val TAG = "BluetoothPrintManager"
     private var selectedDevice: android.bluetooth.BluetoothDevice? = null
     private var isPrinting: Boolean = false
     private val discoveredDevices: MutableList<android.bluetooth.BluetoothDevice> = mutableListOf()
+
+    // Implementation of GenexusModule interface
+    override fun initialize(context: Context) {
+        // You can perform any specific initialization for the Genexus environment here.
+        // For now, let's call your existing permission initializer.
+        this.initializePermissions(context)
+        Log.i(TAG, "BluetoothPrintManager as GenexusModule initialized.")
+    }
 
     // Helper function to safely get device name/address for logging or display
     private fun getSafeDeviceName(device: android.bluetooth.BluetoothDevice?): String {
         device ?: return "unknown device"
         return try {
-            // Accessing device.name might require BLUETOOTH_CONNECT on API 31+ 
+            // Accessing device.name might require BLUETOOTH_CONNECT on API 31+
             // if not bonded or name not obtained via scan (with BLUETOOTH_SCAN).
             device.name ?: device.address
         } catch (se: SecurityException) {
@@ -33,13 +42,11 @@ object BluetoothPrintManager {
         }
     }
 
-    @JvmStatic
     fun initializePermissions(context: Context) {
         Log.i(TAG, "initializePermissions: Called")
         // Permissions should be requested by the Activity. This manager checks them.
     }
 
-    @JvmStatic
     fun startBluetoothScan(context: Context) {
         Log.i(TAG, "startBluetoothScan: Called")
 
@@ -94,7 +101,6 @@ object BluetoothPrintManager {
         }
     }
 
-    @JvmStatic
     fun getDiscoveredDevices(): String {
         return discoveredDevices.joinToString(separator = ";") { device ->
             val name = getSafeDeviceName(device) // Use helper for name
@@ -102,7 +108,6 @@ object BluetoothPrintManager {
         }
     }
 
-    @JvmStatic
     fun selectDevice(context: Context, macAddress: String): Boolean {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter
@@ -121,7 +126,6 @@ object BluetoothPrintManager {
         }
     }
 
-    @JvmStatic
     fun printText(context: Context, text: String): Boolean {
         val currentSelectedDevice = selectedDevice
         if (currentSelectedDevice == null) {
@@ -189,17 +193,14 @@ object BluetoothPrintManager {
         }
     }
 
-    @JvmStatic
     fun isPrinting(): Boolean = isPrinting
 
-    @JvmStatic
     fun isBluetoothEnabled(context: Context): Boolean {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter
         return adapter?.isEnabled == true
     }
 
-    @JvmStatic
     fun getSelectedDevice(): String {
         return selectedDevice?.let { device ->
             getSafeDeviceName(device) // Use helper for consistency
