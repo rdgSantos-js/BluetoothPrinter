@@ -16,7 +16,7 @@ import com.genexus.android.core.externalapi.ExternalApiResult
 
 class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
 
-    private val TAG = "BluetoothPrintManager"
+    private val tag = "BluetoothPrintManager" // Renamed TAG to tag
     private var selectedDevice: BluetoothDevice? = null
     private var isPrintingStatus: Boolean = false // Renamed to avoid conflict with method name
     private val discoveredDevicesList: MutableList<BluetoothDevice> = mutableListOf() // Renamed
@@ -29,14 +29,14 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
             // or through scan results (BLUETOOTH_SCAN)
             device.name ?: device.address
         } catch (se: SecurityException) {
-            Log.w(TAG, "SecurityException getting device name for ${device.address}. Falling back to address.", se)
+            Log.w(tag, "SecurityException getting device name for ${device.address}. Falling back to address.", se)
             device.address
         }
     }
 
     // Internal logic methods, now using this.context and returning ExternalApiResult or data
     private fun doInitializePermissions(): ExternalApiResult {
-        Log.i(TAG, "initializePermissions (ExternalApi): Called")
+        Log.i(tag, "initializePermissions (ExternalApi): Called")
         // Permissions are typically checked before calling methods that need them.
         // This method can be a placeholder or used for pre-flight checks if necessary from Genexus.
         // For now, it just logs and confirms execution.
@@ -44,16 +44,16 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
     }
 
     private fun doStartBluetoothScan(): ExternalApiResult {
-        Log.i(TAG, "doStartBluetoothScan: Called")
+        Log.i(tag, "doStartBluetoothScan: Called")
         val bluetoothManager = this.context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter
         if (adapter == null) {
-            Log.w(TAG, "BluetoothAdapter not available.")
+            Log.w(tag, "BluetoothAdapter not available.")
             return ExternalApiResult.failure("BluetoothAdapter not available.")
         }
 
         if (!adapter.isEnabled) {
-            Log.w(TAG, "Bluetooth is not enabled. Cannot start scan.")
+            Log.w(tag, "Bluetooth is not enabled. Cannot start scan.")
             return ExternalApiResult.failure("Bluetooth is not enabled.")
         }
 
@@ -73,14 +73,14 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         var allScanPermissionsGranted = true
         for (permission in requiredScanPermissions) {
             if (ContextCompat.checkSelfPermission(this.context, permission) != PackageManager.PERMISSION_GRANTED) {
-                Log.e(TAG, "Scan Permission not granted: $permission")
+                Log.e(tag, "Scan Permission not granted: $permission")
                 allScanPermissionsGranted = false
                 break
             }
         }
 
         if (!allScanPermissionsGranted) {
-            Log.e(TAG, "Bluetooth scan cannot proceed without necessary scan permissions.")
+            Log.e(tag, "Bluetooth scan cannot proceed without necessary scan permissions.")
             return ExternalApiResult.failure("Necessary Bluetooth scan permissions not granted.")
         }
 
@@ -91,14 +91,14 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
             }
             val discoveryStarted = adapter.startDiscovery() // Requires BLUETOOTH_SCAN on API 31+ or BLUETOOTH_ADMIN pre-31
             return if (discoveryStarted) {
-                Log.i(TAG, "Bluetooth discovery started successfully.")
+                Log.i(tag, "Bluetooth discovery started successfully.")
                 ExternalApiResult.SUCCESS_CONTINUE
             } else {
-                Log.w(TAG, "Failed to start Bluetooth discovery. Adapter state: ${adapter.state}")
+                Log.w(tag, "Failed to start Bluetooth discovery. Adapter state: ${adapter.state}")
                 ExternalApiResult.failure("Failed to start Bluetooth discovery.")
             }
         } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException during Bluetooth scan operations.", e)
+            Log.e(tag, "SecurityException during Bluetooth scan operations.", e)
             return ExternalApiResult.failure("SecurityException during scan: ${e.message}")
         }
     }
@@ -115,16 +115,16 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         val bluetoothManager = this.context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter
         if (adapter == null) {
-            Log.w(TAG, "BluetoothAdapter not available in selectDevice.")
+            Log.w(tag, "BluetoothAdapter not available in selectDevice.")
             return ExternalApiResult.failure("BluetoothAdapter not available.")
         }
         try {
             val device = adapter.getRemoteDevice(macAddress) // Does not require permissions itself
             selectedDevice = device
-            Log.i(TAG, "Device selected: ${getSafeDeviceName(device)}")
+            Log.i(tag, "Device selected: ${getSafeDeviceName(device)}")
             return ExternalApiResult.success(true) // Indicate success
         } catch (iae: IllegalArgumentException) {
-            Log.e(TAG, "Invalid MAC address provided to selectDevice: $macAddress", iae)
+            Log.e(tag, "Invalid MAC address provided to selectDevice: $macAddress", iae)
             return ExternalApiResult.failure("Invalid MAC address: $macAddress")
         }
     }
@@ -132,40 +132,34 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
     private fun doPrintText(text: String): ExternalApiResult {
         val currentSelectedDevice = selectedDevice
         if (currentSelectedDevice == null) {
-            Log.w(TAG, "No device selected for printing.")
+            Log.w(tag, "No device selected for printing.")
             return ExternalApiResult.failure("No device selected.")
         }
 
         val bluetoothManager = this.context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter
         if (adapter == null || !adapter.isEnabled) {
-            Log.w(TAG, "Bluetooth is not enabled. Cannot print.")
+            Log.w(tag, "Bluetooth is not enabled. Cannot print.")
             return ExternalApiResult.failure("Bluetooth is not enabled.")
         }
 
-        val requiredConnectPermissions = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            requiredConnectPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            // BLUETOOTH permission is implicitly needed for connection pre-API 31
-            // No specific *new* permission here, but it's good to be aware.
-            // If scanning was skipped, BLUETOOTH_ADMIN might be needed for device discovery if not bonded.
-            // However, for connection to a known device, BLUETOOTH is the main one.
-        }
+            val requiredConnectPermissions = listOf(Manifest.permission.BLUETOOTH_CONNECT)
+            var allConnectPermissionsGranted = true
+            for (permission in requiredConnectPermissions) {
+                if (ContextCompat.checkSelfPermission(this.context, permission) != PackageManager.PERMISSION_GRANTED) {
+                    Log.e(tag, "Connect Permission not granted: $permission")
+                    allConnectPermissionsGranted = false
+                    break
+                }
+            }
 
-        var allConnectPermissionsGranted = true
-        for (permission in requiredConnectPermissions) { // This loop only runs for API 31+
-            if (ContextCompat.checkSelfPermission(this.context, permission) != PackageManager.PERMISSION_GRANTED) {
-                Log.e(TAG, "Connect Permission not granted: $permission")
-                allConnectPermissionsGranted = false
-                break
+            if (!allConnectPermissionsGranted) {
+                Log.e(tag, "Cannot print text without BLUETOOTH_CONNECT permission on API 31+.")
+                return ExternalApiResult.failure("BLUETOOTH_CONNECT permission not granted.")
             }
         }
-
-        if (!allConnectPermissionsGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            Log.e(TAG, "Cannot print text without BLUETOOTH_CONNECT permission on API 31+.")
-            return ExternalApiResult.failure("BLUETOOTH_CONNECT permission not granted.")
-        }
+        // For pre-API 31, BLUETOOTH permission is implicitly handled by earlier checks or library.
 
         isPrintingStatus = true
         var connection: BluetoothConnection? = null
@@ -178,25 +172,25 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
             connection = BluetoothConnection(currentSelectedDevice)
             // connect() method will require BLUETOOTH_CONNECT on API 31+
             connection.connect()
-            Log.i(TAG, "Connected to device: $deviceNameForLogs")
+            Log.i(tag, "Connected to device: $deviceNameForLogs")
 
             val printer = EscPosPrinter(connection, 203, 48f, 32)
             printer.printFormattedTextAndCut("[L]$text\n\n\n")
-            Log.i(TAG, "Printing successful to $deviceNameForLogs")
+            Log.i(tag, "Printing successful to $deviceNameForLogs")
             return ExternalApiResult.success(true) // Indicate success
         } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException during printing to $deviceNameForLogs.", e)
+            Log.e(tag, "SecurityException during printing to $deviceNameForLogs.", e)
             return ExternalApiResult.failure("SecurityException during printing: ${e.message}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error during printing to $deviceNameForLogs", e)
+            Log.e(tag, "Error during printing to $deviceNameForLogs", e)
             return ExternalApiResult.failure("Error during printing: ${e.message}")
         } finally {
             try {
                 connection?.disconnect() // May also require BLUETOOTH_CONNECT on API 31+
             } catch (se: SecurityException) {
-                Log.e(TAG, "SecurityException during disconnect from $deviceNameForLogs.", se)
+                Log.e(tag, "SecurityException during disconnect from $deviceNameForLogs.", se)
             } catch (e: Exception) {
-                Log.e(TAG, "Exception during disconnect from $deviceNameForLogs.", e)
+                Log.e(tag, "Exception during disconnect from $deviceNameForLogs.", e)
             }
             isPrintingStatus = false
         }
