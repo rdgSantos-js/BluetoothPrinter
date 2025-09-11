@@ -13,6 +13,10 @@ import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection
 import com.genexus.android.core.actions.ApiAction
 import com.genexus.android.core.externalapi.ExternalApi
 import com.genexus.android.core.externalapi.ExternalApiResult
+import android.app.Activity
+import androidx.core.app.ActivityCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
 class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
 
@@ -24,6 +28,13 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
     // Helper function to safely get device name/address
     private fun getSafeDeviceName(device: BluetoothDevice?): String {
         device ?: return "unknown device"
+        // BLUETOOTH_CONNECT is required for device.name since API 31
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this.context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                Log.w(tag, "BLUETOOTH_CONNECT permission not granted, cannot get device name for ${device.address}. Falling back to address.")
+                return device.address // Fallback to address if name cannot be accessed
+            }
+        }
         return try {
             // Permissions for device.name are implicitly handled by BLUETOOTH_CONNECT
             // or through scan results (BLUETOOTH_SCAN)
@@ -34,13 +45,99 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         }
     }
 
+    // Helper function to convert device list to JSON string
+    private fun devicesToJsonString(devices: List<BluetoothDevice>): String {
+        val jsonArray = JSONArray()
+        for (device in devices) {
+            val jsonObject = JSONObject()
+            val deviceName = getSafeDeviceName(device)
+            jsonObject.put("deviceName", deviceName)
+            jsonObject.put("macAddress", device.address)
+            jsonArray.put(jsonObject)
+        }
+        return jsonArray.toString()
+    }
+
     // Internal logic methods, now using this.context and returning ExternalApiResult or data
     private fun doInitializePermissions(): ExternalApiResult {
-        Log.i(tag, "initializePermissions (ExternalApi): Called")
-        // Permissions are typically checked before calling methods that need them.
-        // This method can be a placeholder or used for pre-flight checks if necessary from Genexus.
-        // For now, it just logs and confirms execution.
-        return ExternalApiResult.SUCCESS_CONTINUE
+        Log.i(tag, "doInitializePermissions (ExternalApi): Checking necessary Bluetooth permissions.")
+
+        val requiredPermissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            requiredPermissions.add(Manifest.permission.BLUETOOTH)
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_ADMIN)
+            requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+        val missingPermissions = mutableListOf<String>()
+        for (permission in requiredPermissions) {
+            if (ContextCompat.checkSelfPermission(this.context, permission) != PackageManager.PERMISSION_GRANTED) {
+                Log.e(tag, "Missing Bluetooth permission: $permission")
+                missingPermissions.add(permission)
+            } else {
+                Log.i(tag, "Bluetooth permission granted: $permission")
+            }
+        }
+
+        return if (missingPermissions.isEmpty()) {
+            Log.i(tag, "All required Bluetooth permissions are granted.")
+            ExternalApiResult.SUCCESS_CONTINUE
+        } else {
+            val message = "Missing Bluetooth permissions: ${missingPermissions.joinToString()}"
+            Log.e(tag, message)
+
+            // 🎯 Foca só na reflection - remove o cast que nunca funciona
+            Log.d(tag, "Context type: ${context.javaClass.name}")
+
+            try {
+                // Tenta pegar a Activity do UIContext via reflection
+                val uiContextClass = context.javaClass
+
+                // Tenta diferentes nomes de campos possíveis
+                val possibleFields = listOf("activity", "mActivity", "_activity", "currentActivity")
+                var foundActivity: Activity? = null
+
+                for (fieldName in possibleFields) {
+                    try {
+                        val field = uiContextClass.getDeclaredField(fieldName)
+                        field.isAccessible = true
+                        val fieldValue = field.get(context)
+
+                        if (fieldValue is Activity) {
+                            foundActivity = fieldValue
+                            Log.i(tag, "Found Activity via field: $fieldName")
+                            break
+                        }
+                    } catch (e: NoSuchFieldException) {
+                        // Campo não existe, tenta o próximo
+                        continue
+                    } catch (e: Exception) {
+                        Log.w(tag, "Error accessing field $fieldName: ${e.message}")
+                    }
+                }
+
+                if (foundActivity != null) {
+                    Log.i(tag, "Requesting Bluetooth permissions...")
+                    ActivityCompat.requestPermissions(
+                        foundActivity,
+                        missingPermissions.toTypedArray(),
+                        1001
+                    )
+                    Log.i(tag, "Permission dialog should appear now.")
+                } else {
+                    Log.w(tag, "Could not find Activity field in UIContext")
+                    Log.w(tag, "Available fields: ${uiContextClass.declaredFields.map { it.name }}")
+                }
+
+            } catch (e: Exception) {
+                Log.e(tag, "Reflection failed completely: ${e.message}")
+            }
+
+            ExternalApiResult.failure(message)
+        }
     }
 
     private fun doStartBluetoothScan(): ExternalApiResult {
@@ -64,7 +161,7 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
             requiredScanPermissions.add(Manifest.permission.BLUETOOTH)
             requiredScanPermissions.add(Manifest.permission.BLUETOOTH_ADMIN)
         }
-         // BLUETOOTH_CONNECT is also needed from API 31 for bonded devices if names are accessed post-scan without prior scan results.
+        // BLUETOOTH_CONNECT is also needed from API 31 for bonded devices if names are accessed post-scan without prior scan results.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requiredScanPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
@@ -104,11 +201,9 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
     }
 
     private fun doGetDiscoveredDevices(): ExternalApiResult {
-        val devicesString = discoveredDevicesList.joinToString(separator = ";") { device ->
-            val name = getSafeDeviceName(device)
-            "$name|${device.address}"
-        }
-        return ExternalApiResult.success(devicesString)
+        val devicesJson = devicesToJsonString(discoveredDevicesList)
+        Log.i(tag, "Discovered devices JSON: $devicesJson")
+        return ExternalApiResult.success(devicesJson)
     }
 
     private fun doSelectDevice(macAddress: String): ExternalApiResult {
@@ -211,6 +306,50 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         return ExternalApiResult.success(deviceName)
     }
 
+    private fun doGetPairedDevices(): ExternalApiResult {
+        Log.i(tag, "doGetPairedDevices: Called")
+        val bluetoothManager = this.context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = bluetoothManager?.adapter
+
+        if (adapter == null) {
+            Log.w(tag, "BluetoothAdapter not available.")
+            return ExternalApiResult.failure("BluetoothAdapter not available.")
+        }
+
+        if (!adapter.isEnabled) {
+            Log.w(tag, "Bluetooth is not enabled. Cannot get paired devices.")
+            return ExternalApiResult.failure("Bluetooth is not enabled.")
+        }
+
+        // Check for BLUETOOTH_CONNECT permission on API 31+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this.context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                Log.e(tag, "BLUETOOTH_CONNECT permission not granted. Cannot get paired devices.")
+                // Optionally, request permission here or guide the user. For now, failing.
+                return ExternalApiResult.failure("BLUETOOTH_CONNECT permission not granted.")
+            }
+        } // For older APIs, BLUETOOTH permission is implicitly required.
+
+        try {
+            val pairedDevices: Set<BluetoothDevice>? = adapter.bondedDevices // Requires BLUETOOTH_CONNECT on API 31+
+            if (pairedDevices.isNullOrEmpty()) {
+                Log.i(tag, "No paired devices found.")
+                return ExternalApiResult.success("[]") // Return empty JSON array string for no devices
+            }
+
+            // Convert paired devices to JSON format
+            val devicesJson = devicesToJsonString(pairedDevices.toList())
+            Log.i(tag, "Paired devices JSON: $devicesJson")
+            return ExternalApiResult.success(devicesJson)
+        } catch (e: SecurityException) {
+            Log.e(tag, "SecurityException while getting paired devices.", e)
+            return ExternalApiResult.failure("SecurityException while getting paired devices: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(tag, "Error getting paired devices", e)
+            return ExternalApiResult.failure("Error getting paired devices: ${e.message}")
+        }
+    }
+
     // Method Invokers
     private val methodInitialize = IMethodInvoker {
         doInitializePermissions()
@@ -238,6 +377,9 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
     private val methodGetSelected = IMethodInvoker {
         doGetSelectedDevice()
     }
+    private val methodGetPaired = IMethodInvoker { // New invoker for paired devices
+        doGetPairedDevices()
+    }
 
     companion object {
         const val NAME = "BluetoothPrintManager" // Choose a unique name for Genexus
@@ -251,6 +393,7 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         private const val METHOD_IS_PRINTING = "IsPrinting"
         private const val METHOD_IS_BLUETOOTH_ENABLED = "IsBluetoothEnabled"
         private const val METHOD_GET_SELECTED_DEVICE = "GetSelectedDevice"
+        private const val METHOD_GET_PAIRED_DEVICES = "GetPairedDevices" // New method name
     }
 
     init {
@@ -262,5 +405,6 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         addMethodHandler(METHOD_IS_PRINTING, 0, methodIsCurrentlyPrinting)
         addMethodHandler(METHOD_IS_BLUETOOTH_ENABLED, 0, methodCheckBluetoothEnabled)
         addMethodHandler(METHOD_GET_SELECTED_DEVICE, 0, methodGetSelected)
+        addMethodHandler(METHOD_GET_PAIRED_DEVICES, 0, methodGetPaired) // New method handler
     }
 }

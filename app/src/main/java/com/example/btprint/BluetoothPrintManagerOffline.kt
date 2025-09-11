@@ -71,5 +71,13 @@ class BluetoothPrintManagerOffline {
         fun getSelectedDevice(): String {
             return "" // Simulate no device selected in offline mode
         }
+
+        @JvmStatic
+        fun getPairedDevices(): String {
+            // Simulate an empty list of paired devices,
+            // or you can return a string formatted with mock devices, if you prefer.
+            // Example returning an empty list:
+            return "[]"
+        }
     }
 }
