@@ -224,18 +224,35 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         }
     }
 
-    private fun doPrintText(text: String): ExternalApiResult {
-        val currentSelectedDevice = selectedDevice
-        if (currentSelectedDevice == null) {
-            Log.w(tag, "No device selected for printing.")
-            return ExternalApiResult.failure("No device selected.")
-        }
-
+    private fun doPrintText(macAddress: String, text: String): ExternalApiResult {
         val bluetoothManager = this.context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter
-        if (adapter == null || !adapter.isEnabled) {
+
+        if (adapter == null) {
+            Log.w(tag, "BluetoothAdapter not available for printing.")
+            return ExternalApiResult.failure("BluetoothAdapter not available.")
+        }
+
+        if (
+            !adapter.isEnabled) {
             Log.w(tag, "Bluetooth is not enabled. Cannot print.")
             return ExternalApiResult.failure("Bluetooth is not enabled.")
+        }
+
+        val deviceToPrint: BluetoothDevice?
+        try {
+            deviceToPrint = adapter.getRemoteDevice(macAddress)
+        } catch (iae: IllegalArgumentException) {
+            Log.e(tag, "Invalid MAC address provided for printing: $macAddress", iae)
+            return ExternalApiResult.failure("Invalid MAC address for printing: $macAddress")
+        } catch (e: Exception) {
+            Log.e(tag, "Error getting remote device $macAddress for printing", e)
+            return ExternalApiResult.failure("Error getting device for printing: ${e.message}")
+        }
+
+        if (deviceToPrint == null) {
+            Log.w(tag, "Could not find device with MAC address: $macAddress for printing.")
+            return ExternalApiResult.failure("Device not found for MAC address: $macAddress")
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -254,25 +271,20 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
                 return ExternalApiResult.failure("BLUETOOTH_CONNECT permission not granted.")
             }
         }
-        // For pre-API 31, BLUETOOTH permission is implicitly handled by earlier checks or library.
 
         isPrintingStatus = true
         var connection: BluetoothConnection? = null
-        val deviceNameForLogs = getSafeDeviceName(currentSelectedDevice)
+        val deviceNameForLogs = getSafeDeviceName(deviceToPrint)
 
         try {
-            // BluetoothConnection constructor might require BLUETOOTH_CONNECT on API 31+
-            // if it internally tries to fetch device name or other sensitive info without prior scan providing it.
-            // The EscPosPrinter library itself handles the connection.
-            connection = BluetoothConnection(currentSelectedDevice)
-            // connect() method will require BLUETOOTH_CONNECT on API 31+
+            connection = BluetoothConnection(deviceToPrint)
             connection.connect()
-            Log.i(tag, "Connected to device: $deviceNameForLogs")
+            Log.i(tag, "Connected to device: $deviceNameForLogs for printing.")
 
             val printer = EscPosPrinter(connection, 203, 48f, 32)
             printer.printFormattedTextAndCut("[L]$text\n\n\n")
             Log.i(tag, "Printing successful to $deviceNameForLogs")
-            return ExternalApiResult.success(true) // Indicate success
+            return ExternalApiResult.success(true)
         } catch (e: SecurityException) {
             Log.e(tag, "SecurityException during printing to $deviceNameForLogs.", e)
             return ExternalApiResult.failure("SecurityException during printing: ${e.message}")
@@ -281,7 +293,7 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
             return ExternalApiResult.failure("Error during printing: ${e.message}")
         } finally {
             try {
-                connection?.disconnect() // May also require BLUETOOTH_CONNECT on API 31+
+                connection?.disconnect()
             } catch (se: SecurityException) {
                 Log.e(tag, "SecurityException during disconnect from $deviceNameForLogs.", se)
             } catch (e: Exception) {
@@ -321,23 +333,20 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
             return ExternalApiResult.failure("Bluetooth is not enabled.")
         }
 
-        // Check for BLUETOOTH_CONNECT permission on API 31+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this.context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 Log.e(tag, "BLUETOOTH_CONNECT permission not granted. Cannot get paired devices.")
-                // Optionally, request permission here or guide the user. For now, failing.
                 return ExternalApiResult.failure("BLUETOOTH_CONNECT permission not granted.")
             }
-        } // For older APIs, BLUETOOTH permission is implicitly required.
+        }
 
         try {
-            val pairedDevices: Set<BluetoothDevice>? = adapter.bondedDevices // Requires BLUETOOTH_CONNECT on API 31+
+            val pairedDevices: Set<BluetoothDevice>? = adapter.bondedDevices
             if (pairedDevices.isNullOrEmpty()) {
                 Log.i(tag, "No paired devices found.")
-                return ExternalApiResult.success("[]") // Return empty JSON array string for no devices
+                return ExternalApiResult.success("[]")
             }
 
-            // Convert paired devices to JSON format
             val devicesJson = devicesToJsonString(pairedDevices.toList())
             Log.i(tag, "Paired devices JSON: $devicesJson")
             return ExternalApiResult.success(devicesJson)
@@ -365,8 +374,9 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         doSelectDevice(macAddress)
     }
     private val methodPrint = IMethodInvoker { params ->
-        val textToPrint = params[0] as String
-        doPrintText(textToPrint)
+        val macAddress = params[0] as String
+        val textToPrint = params[1] as String
+        doPrintText(macAddress, textToPrint)
     }
     private val methodIsCurrentlyPrinting = IMethodInvoker {
         doIsPrinting()
@@ -377,14 +387,13 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
     private val methodGetSelected = IMethodInvoker {
         doGetSelectedDevice()
     }
-    private val methodGetPaired = IMethodInvoker { // New invoker for paired devices
+    private val methodGetPaired = IMethodInvoker { 
         doGetPairedDevices()
     }
 
     companion object {
-        const val NAME = "BluetoothPrintManager" // Choose a unique name for Genexus
+        const val NAME = "BluetoothPrintManager"
 
-        // Method names for Genexus
         private const val METHOD_INITIALIZE_PERMISSIONS = "InitializePermissions"
         private const val METHOD_START_BLUETOOTH_SCAN = "StartBluetoothScan"
         private const val METHOD_GET_DISCOVERED_DEVICES = "GetDiscoveredDevices"
@@ -393,18 +402,18 @@ class BluetoothPrintManager(action: ApiAction) : ExternalApi(action) {
         private const val METHOD_IS_PRINTING = "IsPrinting"
         private const val METHOD_IS_BLUETOOTH_ENABLED = "IsBluetoothEnabled"
         private const val METHOD_GET_SELECTED_DEVICE = "GetSelectedDevice"
-        private const val METHOD_GET_PAIRED_DEVICES = "GetPairedDevices" // New method name
+        private const val METHOD_GET_PAIRED_DEVICES = "GetPairedDevices"
     }
 
     init {
         addMethodHandler(METHOD_INITIALIZE_PERMISSIONS, 0, methodInitialize)
         addMethodHandler(METHOD_START_BLUETOOTH_SCAN, 0, methodStartScan)
         addMethodHandler(METHOD_GET_DISCOVERED_DEVICES, 0, methodGetDevices)
-        addMethodHandler(METHOD_SELECT_DEVICE, 1, methodSelect) // Expects 1 param: macAddress
-        addMethodHandler(METHOD_PRINT_TEXT, 1, methodPrint)       // Expects 1 param: text
+        addMethodHandler(METHOD_SELECT_DEVICE, 1, methodSelect)
+        addMethodHandler(METHOD_PRINT_TEXT, 2, methodPrint) // Now expects 2 params
         addMethodHandler(METHOD_IS_PRINTING, 0, methodIsCurrentlyPrinting)
         addMethodHandler(METHOD_IS_BLUETOOTH_ENABLED, 0, methodCheckBluetoothEnabled)
         addMethodHandler(METHOD_GET_SELECTED_DEVICE, 0, methodGetSelected)
-        addMethodHandler(METHOD_GET_PAIRED_DEVICES, 0, methodGetPaired) // New method handler
+        addMethodHandler(METHOD_GET_PAIRED_DEVICES, 0, methodGetPaired)
     }
 }
