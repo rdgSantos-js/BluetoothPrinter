@@ -1,4 +1,4 @@
-package com.example.btprint
+/*package com.example.btprint
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -531,3 +531,4 @@ class MainActivity : ComponentActivity() {
         Log.d(TAG, "onDestroy: discoveryReceiver unregistered.")
     }
 }
+*/

@@ -1,17 +1,19 @@
 plugins {
-    alias(libs.plugins.android.application)
+    alias(libs.plugins.android.library) // Alterado de application para library
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
+    //alias(libs.plugins.kotlin.compose) // REMOVED: Managed by AGP
+    //alias(libs.plugins.kotlin.compose) // REMOVED: Deprecated plugin
+    id 'maven-publish' // Adicionado plugin maven-publish
 }
 
 android {
     namespace 'com.example.btprint'
-    compileSdk 36
+    compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.btprint"
-        minSdk 24
-        targetSdk 36
+        // applicationId "com.example.btprint" // Removido para bibliotecas
+        minSdk 21
+        // targetSdk 34 // targetSdk é geralmente herdado de compileSdk para bibliotecas, mas pode ser especificado
         versionCode 1
         versionName "1.0"
 
@@ -34,9 +36,13 @@ android {
     buildFeatures {
         compose true
     }
+    composeOptions {
+        kotlinCompilerExtensionVersion libs.versions.kotlinComposeCompiler.get()
+    }
 }
 
 dependencies {
+    compileOnly "com.genexus.android:FlexibleClient:2.4.+" // Added GeneXus FlexibleClient
 
     implementation libs.androidx.core.ktx
     implementation libs.androidx.lifecycle.runtime.ktx
@@ -54,4 +60,47 @@ dependencies {
     androidTestImplementation libs.androidx.ui.test.junit4
     debugImplementation libs.androidx.ui.tooling
     debugImplementation libs.androidx.ui.test.manifest
+}
+
+publishing {
+    publications {
+        release(MavenPublication) {
+            groupId = 'com.example'
+            artifactId = 'btprint'
+            version = '1.0.0'
+
+            afterEvaluate {
+                from components.release
+            }
+        }
+
+        debug(MavenPublication) {
+            groupId = 'com.example'
+            artifactId = 'btprint'
+            version = '1.0.0-SNAPSHOT'
+
+            afterEvaluate {
+                from components.debug
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = "internal" // Nomeando o repositório
+            def repoPath = System.getenv("GENEXUS_REPO")
+            if (repoPath == null || repoPath.isEmpty()) {
+                // Você pode querer lançar um erro aqui se a variável não estiver definida
+                // throw new InvalidUserDataException("Variável de ambiente GENEXUS_REPO não definida.")
+                // Ou usar um fallback, como o diretório de build do projeto:
+                // url = uri("${rootProject.layout.buildDirectory.get().asFile}/repo")
+                // Por enquanto, vamos manter a lógica que pode falhar se não definida,
+                // para que você seja alertado.
+                // Para evitar falha no sync inicial se a variável não estiver setada no ambiente do IDE:
+                url = uri(rootProject.layout.buildDirectory.get().asFile.toString() + "/repo_fallback_GENEXUS_REPO_not_set")
+
+            } else {
+                url = uri(repoPath)
+            }
+        }
+    }
 }

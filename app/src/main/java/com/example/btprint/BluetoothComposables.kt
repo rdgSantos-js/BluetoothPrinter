@@ -1,4 +1,4 @@
-package com.example.btprint
+/*package com.example.btprint
 
 import android.bluetooth.BluetoothDevice
 import android.graphics.Bitmap // Import Bitmap
@@ -163,3 +163,4 @@ fun DefaultPreview() {
         )
     }
 }
+*/
