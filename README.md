@@ -21,3 +21,5 @@ Este projeto foi desenvolvido tomando como referência o repositório oficial de
 ## 📌 Observação
 
 O **PrinterBT** gerencia **permissões, descoberta de dispositivos e comunicação básica com as impressoras**.
+
+Para passar o repositório para a pasta do maven, executar o comando "gradlew publishDebugPublicationToInternalRepository"
